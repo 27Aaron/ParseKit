@@ -419,7 +419,8 @@ fn build_post(
     .map(|mut direct| {
         if let Some(candidate) = matching_candidate(&direct, &candidates) {
             let same_url = direct.url == candidate.url;
-            merge_source_metadata(&mut direct, candidate, same_url);
+            let share_key = may_share_decode_key(&direct, candidate);
+            merge_source_metadata(&mut direct, candidate, same_url, share_key);
         }
         direct
     });
@@ -506,7 +507,7 @@ fn push_source(
         .iter_mut()
         .find(|existing| sources_are_equivalent(existing, &source))
     {
-        merge_source_metadata(existing, &source, true);
+        merge_source_metadata(existing, &source, true, true);
     } else {
         output.push(source);
     }
@@ -564,6 +565,22 @@ fn sources_are_equivalent(left: &MediaSource, right: &MediaSource) -> bool {
     left.url == right.url && left.decode_key == right.decode_key
 }
 
+/// Whether it is safe to copy `source.decode_key` onto `target`.
+fn may_share_decode_key(target: &MediaSource, source: &MediaSource) -> bool {
+    if target.url == source.url {
+        return true;
+    }
+    if let (Some(left), Some(right)) = (
+        derive_direct_media_url(&target.url),
+        derive_direct_media_url(&source.url),
+    ) && left == right
+    {
+        return true;
+    }
+    // Unique identity match (caller ensures uniqueness) may share a key.
+    has_matching_media_identity(&target.url, &source.url)
+}
+
 fn unique_matching_candidate(
     candidates: &[MediaSource],
     predicate: impl Fn(&MediaSource) -> bool,
@@ -606,7 +623,12 @@ fn has_matching_media_identity(left: &Url, right: &Url) -> bool {
     !file_key_conflicts && !token_conflicts && (file_key_matches || token_matches)
 }
 
-fn merge_source_metadata(target: &mut MediaSource, source: &MediaSource, inherit_size_hint: bool) {
+fn merge_source_metadata(
+    target: &mut MediaSource,
+    source: &MediaSource,
+    inherit_size_hint: bool,
+    inherit_decode_key: bool,
+) {
     if target.codec == VideoCodec::Unknown {
         target.codec = source.codec;
     }
@@ -616,8 +638,13 @@ fn merge_source_metadata(target: &mut MediaSource, source: &MediaSource, inherit
     if target.height.is_none() {
         target.height = source.height;
     }
-    if target.decode_key.is_none() {
-        target.decode_key = source.decode_key;
+    // Never overwrite an existing key with a different one.
+    if inherit_decode_key {
+        match (target.decode_key, source.decode_key) {
+            (None, Some(key)) => target.decode_key = Some(key),
+            (Some(existing), Some(other)) if existing != other => {}
+            _ => {}
+        }
     }
     if inherit_size_hint && target.size_hint.is_none() {
         target.size_hint = source.size_hint;
@@ -1022,6 +1049,31 @@ mod tests {
         );
         assert_eq!(post.video.decode_key, Some(987_654_321));
         assert_eq!(post.video.size_hint, None);
+    }
+
+    #[test]
+    fn merge_does_not_overwrite_existing_decode_key() {
+        let mut target = MediaSource {
+            url: Url::parse("https://finder.video.qq.com/a.mp4?token=t").unwrap(),
+            codec: VideoCodec::Unknown,
+            provenance: MediaSourceKind::Direct,
+            width: None,
+            height: None,
+            size_hint: None,
+            decode_key: Some(111),
+        };
+        let source = MediaSource {
+            url: target.url.clone(),
+            codec: VideoCodec::H264,
+            provenance: MediaSourceKind::H264,
+            width: Some(1),
+            height: Some(1),
+            size_hint: Some(9),
+            decode_key: Some(222),
+        };
+        merge_source_metadata(&mut target, &source, true, true);
+        assert_eq!(target.decode_key, Some(111));
+        assert_eq!(target.codec, VideoCodec::H264);
     }
 
     #[test]
