@@ -2,7 +2,7 @@
 
 use parse_kit::{Error, MediaSource, ResolvedPost, Result};
 
-use crate::ui;
+use crate::{sources::source_kind_label, ui};
 
 /// Instant summary (non-TTY / scripts). Every field is a ✓ row.
 pub fn print_post_summary(post: &ResolvedPost) {
@@ -77,13 +77,7 @@ fn source_json(index: usize, source: &MediaSource) -> serde_json::Value {
         "index": index,
         "label": source.quality_label(),
         "summary": source.quality_summary(),
-        "kind": match source.provenance {
-            parse_kit::MediaSourceKind::Direct => "origin",
-            parse_kit::MediaSourceKind::Derived => "derived",
-            parse_kit::MediaSourceKind::H264 => "h264",
-            parse_kit::MediaSourceKind::H265 => "h265",
-            parse_kit::MediaSourceKind::Generic => "generic",
-        },
+        "kind": source_kind_label(source.provenance),
         "codec": source.codec,
         "width": source.width,
         "height": source.height,

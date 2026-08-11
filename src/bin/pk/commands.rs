@@ -93,7 +93,7 @@ pub async fn download(
     let multi_image = post.kind == ContentKind::ImageSet && source.is_none() && !first_only;
 
     // Interactive pick when TTY and user did not pin --source / first_only.
-    let chosen: Vec<&MediaSource> =
+    let chosen: Vec<(usize, &MediaSource)> =
         if human && source.is_none() && !first_only && all_sources.len() > 1 {
             let table = select::source_option_table(&all_sources);
             let header = Some(table.header.as_str());
@@ -131,9 +131,12 @@ pub async fn download(
                         .join(" ")
                 ),
             );
-            picked.into_iter().map(|i| all_sources[i]).collect()
+            picked
+                .into_iter()
+                .map(|index| (index, all_sources[index]))
+                .collect()
         } else if multi_image {
-            all_sources
+            all_sources.into_iter().enumerate().collect()
         } else {
             let selected_index = requested_source_index(post.kind, source, first_only);
             select_sources(&post, prefer, selected_index)?
@@ -143,8 +146,8 @@ pub async fn download(
         return Err(parse_kit::Error::MediaUnavailable);
     }
 
-    // Multi-file download (image set or multi-select).
-    if chosen.len() > 1 {
+    // Image sets are independent files. Video sources remain an ordered fallback chain.
+    if should_download_as_set(post.kind, chosen.len()) {
         return download_many(human, &post, &downloader, &chosen, json).await;
     }
 
@@ -158,13 +161,16 @@ pub async fn download(
     let media = if let Some(spinner) = download_spin.as_ref() {
         let label = spinner.label();
         match downloader
-            .download_playable_with_progress(sources.iter().copied(), move |progress| {
-                label.set(ui::download_progress_label(
-                    progress.percent,
-                    progress.downloaded_bytes,
-                    progress.total_bytes,
-                ));
-            })
+            .download_playable_with_progress(
+                sources.iter().map(|(_, source)| *source),
+                move |progress| {
+                    label.set(ui::download_progress_label(
+                        progress.percent,
+                        progress.downloaded_bytes,
+                        progress.total_bytes,
+                    ));
+                },
+            )
             .await
         {
             Ok(media) => media,
@@ -177,7 +183,7 @@ pub async fn download(
         }
     } else {
         downloader
-            .download_playable(sources.iter().copied())
+            .download_playable(sources.iter().map(|(_, source)| *source))
             .await?
     };
     let skipped = media.skipped;
@@ -215,11 +221,15 @@ pub async fn download(
     Ok(())
 }
 
+fn should_download_as_set(kind: ContentKind, source_count: usize) -> bool {
+    kind == ContentKind::ImageSet && source_count > 1
+}
+
 async fn download_many(
     human: bool,
     post: &ResolvedPost,
     downloader: &MediaDownloader,
-    sources: &[&MediaSource],
+    sources: &[(usize, &MediaSource)],
     json: bool,
 ) -> Result<()> {
     let total_files = sources.len();
@@ -231,20 +241,15 @@ async fn download_many(
 
     let mut paths: Vec<(PathBuf, u64, bool)> = Vec::with_capacity(total_files);
     let mut skipped = 0usize;
-    for (index, media_source) in sources.iter().enumerate() {
-        let file_no = index + 1;
-        // Sequence for multi-file naming must match original post index when possible.
-        // download() always uses sequence 0 unless download_all; use download_with_progress
-        // and rely on stem + sequence from downloader API.
-        // MediaDownloader::download uses sequence 0 always — for multi we need sequence.
-        // Use download_with_progress via private sequence? Only download_all uses sequence.
-        // For selected subset, sequence index of pick order is fine for unique names.
-        let sequence = u32::try_from(index).unwrap_or(u32::MAX);
-        let media = if let Some(spinner) = download_spin.as_ref() {
+    for (download_index, &(source_index, media_source)) in sources.iter().enumerate() {
+        let file_no = download_index + 1;
+        let sequence = u32::try_from(source_index)
+            .map_err(|_| parse_kit::Error::Config("媒体源数量超出支持范围".into()))?;
+        let media_result = if let Some(spinner) = download_spin.as_ref() {
             let label = spinner.label();
             label.set(format!("Downloading  {file_no}/{total_files}…"));
             let label_prefix = format!("Downloading  {file_no}/{total_files}");
-            match downloader
+            downloader
                 .download_indexed_with_progress(media_source, sequence, move |progress| {
                     label.set(format!(
                         "{label_prefix}  {:>3}%  ·  {} / {}",
@@ -254,26 +259,17 @@ async fn download_many(
                     ));
                 })
                 .await
-            {
-                Ok(media) => media,
-                Err(error) => {
-                    if let Some(spinner) = download_spin {
-                        spinner.finish_err("Failed", "download").await;
-                    }
-                    return Err(error);
-                }
-            }
         } else {
-            match downloader.download_indexed(media_source, sequence).await {
-                Ok(media) => media,
-                Err(error) => {
-                    for (path, _, was_skipped) in paths.drain(..) {
-                        if !was_skipped {
-                            let _ = tokio::fs::remove_file(path).await;
-                        }
-                    }
-                    return Err(error);
+            downloader.download_indexed(media_source, sequence).await
+        };
+        let media = match media_result {
+            Ok(media) => media,
+            Err(error) => {
+                if let Some(spinner) = download_spin {
+                    spinner.finish_err("Failed", "download").await;
                 }
+                cleanup_new_downloads(&mut paths).await;
+                return Err(error);
             }
         };
         let was_skipped = media.skipped;
@@ -286,7 +282,9 @@ async fn download_many(
     }
 
     if let Some(spinner) = download_spin {
-        let total: u64 = paths.iter().map(|(_, b, _)| *b).sum();
+        let total = paths
+            .iter()
+            .fold(0_u64, |total, (_, bytes, _)| total.saturating_add(*bytes));
         let (action, detail) = if skipped == paths.len() {
             (
                 "Already saved",
@@ -334,6 +332,18 @@ async fn download_many(
         }
     }
     Ok(())
+}
+
+async fn cleanup_new_downloads(paths: &mut Vec<(PathBuf, u64, bool)>) {
+    for (path, _, was_skipped) in paths.drain(..) {
+        if !was_skipped && let Err(error) = tokio::fs::remove_file(&path).await {
+            tracing::warn!(
+                path = %path.display(),
+                %error,
+                "failed to clean up a partial multi-file download"
+            );
+        }
+    }
 }
 
 pub fn platforms(check: bool) -> Result<()> {
@@ -443,7 +453,7 @@ pub fn wechat_logout() -> Result<()> {
     if removed {
         ui::ok("logout", "removed YUANBAO_COOKIE from .env.local");
     } else {
-        ui::note("no YUANBAO_COOKIE line in .env.local (process env cleared if set)");
+        ui::note("no YUANBAO_COOKIE entry in .env.local");
     }
     Ok(())
 }
@@ -507,7 +517,7 @@ pub fn bilibili_logout() -> Result<()> {
     if removed {
         ui::ok("logout", "removed BILIBILI_COOKIE from .env.local");
     } else {
-        ui::note("no BILIBILI_COOKIE line in .env.local (process env cleared if set)");
+        ui::note("no BILIBILI_COOKIE entry in .env.local");
     }
     Ok(())
 }
@@ -540,7 +550,6 @@ fn print_qr_or_url(url: &str) {
             println!();
             println!("{art}");
             println!();
-            ui::note(format!("if the QR is unreadable, open: {url}"));
         }
         Err(_) => {
             ui::note(format!("open this URL (or encode as QR): {url}"));
@@ -580,21 +589,39 @@ fn render_terminal_qr_image(image: &[u8]) -> std::result::Result<String, ()> {
     use jpeg_decoder::{Decoder, PixelFormat};
     use std::io::Cursor;
 
+    const MAX_QR_IMAGE_DIMENSION: usize = 4_096;
+
     let mut decoder = Decoder::new(Cursor::new(image));
-    let pixels = decoder.decode().map_err(|_| ())?;
+    decoder.read_info().map_err(|_| ())?;
     let info = decoder.info().ok_or(())?;
     let width = usize::from(info.width);
     let height = usize::from(info.height);
+    if width == 0
+        || height == 0
+        || width > MAX_QR_IMAGE_DIMENSION
+        || height > MAX_QR_IMAGE_DIMENSION
+    {
+        return Err(());
+    }
+    let mut pixels = decoder.decode().map_err(|_| ())?;
     let luma = match info.pixel_format {
         PixelFormat::L8 => pixels,
-        PixelFormat::RGB24 => pixels
-            .chunks_exact(3)
-            .map(|rgb| {
-                let value =
-                    u32::from(rgb[0]) * 299 + u32::from(rgb[1]) * 587 + u32::from(rgb[2]) * 114;
-                (value / 1000) as u8
-            })
-            .collect(),
+        PixelFormat::RGB24 => {
+            let pixel_count = width.checked_mul(height).ok_or(())?;
+            if pixels.len() != pixel_count.checked_mul(3).ok_or(())? {
+                return Err(());
+            }
+            for index in 0..pixel_count {
+                let offset = index * 3;
+                let value = u32::from(pixels[offset]) * 299
+                    + u32::from(pixels[offset + 1]) * 587
+                    + u32::from(pixels[offset + 2]) * 114;
+                pixels[index] =
+                    u8::try_from(value / 1000).expect("RGB-to-luma conversion stays within u8");
+            }
+            pixels.truncate(pixel_count);
+            pixels
+        }
         _ => return Err(()),
     };
     render_terminal_qr_luma(&luma, width, height)
@@ -654,8 +681,9 @@ fn render_terminal_qr_luma(
         return Err(());
     }
 
-    let mut matrix = vec![false; modules * modules];
-    let cell_area = module_size * module_size;
+    let matrix_len = modules.checked_mul(modules).ok_or(())?;
+    let mut matrix = vec![false; matrix_len];
+    let cell_area = module_size.checked_mul(module_size).ok_or(())?;
     for cell_y in 0..modules {
         for cell_x in 0..modules {
             let mut dark_pixels = 0usize;
@@ -668,7 +696,7 @@ fn render_terminal_qr_luma(
         }
     }
 
-    let mut art = String::new();
+    let mut art = String::with_capacity(matrix_len.saturating_mul(3).saturating_add(modules / 2));
     for y in (0..modules).step_by(2) {
         for x in 0..modules {
             let top = matrix[y * modules + x];
@@ -725,5 +753,12 @@ mod qr_image_tests {
     fn rejects_non_qr_grid_dimensions() {
         let pixels = vec![0; 40 * 40];
         assert!(render_terminal_qr_luma(&pixels, 40, 40).is_err());
+    }
+
+    #[test]
+    fn only_image_sets_are_downloaded_as_independent_files() {
+        assert!(should_download_as_set(ContentKind::ImageSet, 2));
+        assert!(!should_download_as_set(ContentKind::ImageSet, 1));
+        assert!(!should_download_as_set(ContentKind::Video, 3));
     }
 }

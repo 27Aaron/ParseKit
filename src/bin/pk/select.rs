@@ -10,9 +10,12 @@
 
 use std::io::{self, IsTerminal, Read, Write};
 
-use parse_kit::{Error, MediaSource, MediaSourceKind, Result};
+use parse_kit::{Error, MediaSource, Result};
 
-use crate::ui::{self, pad_display, pad_display_left};
+use crate::{
+    sources::source_kind_label,
+    ui::{self, pad_display, pad_display_left},
+};
 
 const GREEN: &str = "\x1b[32m";
 const CYAN: &str = "\x1b[36m";
@@ -119,14 +122,7 @@ fn source_cols(source: &MediaSource) -> SourceCols {
         .filter(|v| *v > 0)
         .map(ui::format_bytes)
         .unwrap_or_default();
-    let kind = match source.provenance {
-        MediaSourceKind::Direct => "origin",
-        MediaSourceKind::Derived => "derived",
-        MediaSourceKind::H264 => "h264",
-        MediaSourceKind::H265 => "h265",
-        MediaSourceKind::Generic => "generic",
-    }
-    .to_owned();
+    let kind = source_kind_label(source.provenance).to_owned();
     SourceCols {
         label: source.quality_label(),
         dims,
@@ -280,11 +276,14 @@ fn run_picker(options: &[String], column_header: Option<&str>, mut mode: Mode) -
     let mut stdin = io::stdin();
     let mut buf = [0_u8; 16];
     loop {
-        let n = stdin
-            .read(&mut buf)
-            .map_err(|e| Error::Config(format!("读取键盘失败: {e}")))?;
+        let n = match stdin.read(&mut buf) {
+            Ok(n) => n,
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+            Err(error) => return Err(Error::Config(format!("读取键盘失败: {error}"))),
+        };
         if n == 0 {
-            continue;
+            clear_drawn(lines)?;
+            return Ok(Outcome::Cancel);
         }
         match parse_key(&buf[..n]) {
             Key::Up => match &mut mode {
@@ -349,6 +348,7 @@ fn run_picker(options: &[String], column_header: Option<&str>, mut mode: Mode) -
 
 fn draw(mode: &Mode, options: &[String], column_header: Option<&str>) -> Result<()> {
     let mut out = io::stdout();
+    let color = ui::stdout_color();
     let (title, hint) = match mode {
         Mode::Single { .. } => (
             "选择下载画质",
@@ -359,8 +359,13 @@ fn draw(mode: &Mode, options: &[String], column_header: Option<&str>) -> Result<
             "↑↓ 移动  ·  Space 勾选  ·  Enter 确认  ·  q 取消",
         ),
     };
-    writeln!(out, "{CYAN}{title}{RESET}").map_err(io_err)?;
-    writeln!(out, "{DIM}{hint}{RESET}").map_err(io_err)?;
+    if color {
+        writeln!(out, "{CYAN}{title}{RESET}").map_err(io_err)?;
+        writeln!(out, "{DIM}{hint}{RESET}").map_err(io_err)?;
+    } else {
+        writeln!(out, "{title}").map_err(io_err)?;
+        writeln!(out, "{hint}").map_err(io_err)?;
+    }
 
     // 1-based display numbers: [ 1] … [13]. Internal cursor stays 0-based.
     let index_width = options.len().to_string().len().max(1);
@@ -372,20 +377,30 @@ fn draw(mode: &Mode, options: &[String], column_header: Option<&str>) -> Result<
             " ",
             " ".repeat(index_width + 2) // width of "[N]"
         );
-        writeln!(out, "{DIM}{gutter}{header}{RESET}").map_err(io_err)?;
+        if color {
+            writeln!(out, "{DIM}{gutter}{header}{RESET}").map_err(io_err)?;
+        } else {
+            writeln!(out, "{gutter}{header}").map_err(io_err)?;
+        }
     }
     for (i, label) in options.iter().enumerate() {
         let (cursor_here, on) = match mode {
             Mode::Single { cursor } => (*cursor == i, *cursor == i),
             Mode::Multi { cursor, selected } => (*cursor == i, selected[i]),
         };
-        let circle = if on {
+        let circle = if on && color {
             format!("{GREEN}{ICON_ON}{RESET}")
-        } else {
+        } else if on {
+            ICON_ON.to_owned()
+        } else if color {
             format!("{DIM}{ICON_OFF}{RESET}")
+        } else {
+            ICON_OFF.to_owned()
         };
-        let pointer = if cursor_here {
+        let pointer = if cursor_here && color {
             format!("{CYAN}❯{RESET}")
+        } else if cursor_here {
+            "❯".into()
         } else {
             " ".into()
         };
@@ -433,7 +448,7 @@ enum Key {
 fn parse_key(buf: &[u8]) -> Key {
     match buf {
         [b'\n' | b'\r', ..] => Key::Enter,
-        [b'q' | b'Q'] => Key::Cancel,
+        [b'q' | b'Q', ..] | [0x03 | 0x04, ..] => Key::Cancel,
         [0x1b, b'[', b'A', ..] => Key::Up,
         [0x1b, b'[', b'B', ..] => Key::Down,
         [b'k' | b'K', ..] => Key::Up,
@@ -458,7 +473,9 @@ impl RawMode {
         }
         let original = unsafe { original.assume_init() };
         let mut raw = original;
-        raw.c_lflag &= !(libc::ICANON | libc::ECHO);
+        // Disable signal generation so Ctrl-C is handled as input and Drop can
+        // restore the terminal before the picker exits.
+        raw.c_lflag &= !(libc::ICANON | libc::ECHO | libc::ISIG);
         raw.c_cc[libc::VMIN] = 1;
         raw.c_cc[libc::VTIME] = 0;
         if unsafe { libc::tcsetattr(fd, libc::TCSANOW, &raw) } != 0 {
@@ -482,7 +499,7 @@ mod tests {
     use parse_kit::{MediaSource, MediaSourceKind, VideoCodec};
     use url::Url;
 
-    use super::{align_source_table, source_cols};
+    use super::{Key, align_source_table, parse_key, source_cols};
 
     fn sample(
         label: &str,
@@ -548,5 +565,12 @@ mod tests {
         assert!(labels[0].contains("1920×1080"));
         assert!(labels[2].contains("origin"));
         assert!(!labels[0].contains('★'));
+    }
+
+    #[test]
+    fn cancel_keys_allow_buffered_input_and_control_bytes() {
+        assert!(matches!(parse_key(b"quit"), Key::Cancel));
+        assert!(matches!(parse_key(&[0x03]), Key::Cancel));
+        assert!(matches!(parse_key(&[0x04]), Key::Cancel));
     }
 }

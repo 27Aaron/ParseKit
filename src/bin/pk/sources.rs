@@ -1,8 +1,18 @@
 //! Select media sources for CLI downloads.
 
-use parse_kit::{ContentKind, Error, MediaSource, ResolvedPost, Result};
+use parse_kit::{ContentKind, Error, MediaSource, MediaSourceKind, ResolvedPost, Result};
 
 use crate::args::Prefer;
+
+pub fn source_kind_label(kind: MediaSourceKind) -> &'static str {
+    match kind {
+        MediaSourceKind::Direct => "origin",
+        MediaSourceKind::Derived => "derived",
+        MediaSourceKind::H264 => "h264",
+        MediaSourceKind::H265 => "h265",
+        MediaSourceKind::Generic => "generic",
+    }
+}
 
 pub fn requested_source_index(
     kind: ContentKind,
@@ -16,8 +26,8 @@ pub fn select_sources(
     post: &ResolvedPost,
     prefer: Prefer,
     source: Option<usize>,
-) -> Result<Vec<&MediaSource>> {
-    let mut sources: Vec<&MediaSource> = post.media_sources().collect();
+) -> Result<Vec<(usize, &MediaSource)>> {
+    let mut sources: Vec<(usize, &MediaSource)> = post.media_sources().enumerate().collect();
     if sources.is_empty() {
         return Err(Error::MediaUnavailable);
     }
@@ -81,8 +91,10 @@ mod tests {
         let best = select_sources(&post, Prefer::Best, None).expect("sources");
         let smallest = select_sources(&post, Prefer::Smallest, None).expect("sources");
 
-        assert!(best[0].url.path().ends_with("best.mp4"));
-        assert!(smallest[0].url.path().ends_with("smallest.mp4"));
+        assert_eq!(best[0].0, 0);
+        assert!(best[0].1.url.path().ends_with("best.mp4"));
+        assert_eq!(smallest[0].0, 2);
+        assert!(smallest[0].1.url.path().ends_with("smallest.mp4"));
     }
 
     #[test]
@@ -90,7 +102,8 @@ mod tests {
         let post = video_post();
         for prefer in [Prefer::Best, Prefer::Smallest] {
             let selected = select_sources(&post, prefer, Some(1)).expect("source index 1");
-            assert!(selected[0].url.path().ends_with("middle.mp4"));
+            assert_eq!(selected[0].0, 1);
+            assert!(selected[0].1.url.path().ends_with("middle.mp4"));
         }
     }
 

@@ -15,8 +15,11 @@ use clap::Parser;
 use self::args::{BilibiliCmd, Cli, Commands, WechatCmd};
 
 fn main() -> ExitCode {
-    config::load_dotenv();
     let cli = Cli::parse();
+    if let Err(error) = config::load_dotenv() {
+        ui::err("Error", error.to_string());
+        return ExitCode::FAILURE;
+    }
     init_tracing(cli.verbose);
 
     let runtime = match tokio::runtime::Builder::new_multi_thread()

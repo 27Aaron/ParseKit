@@ -42,7 +42,7 @@ pub enum Commands {
         /// Share URL or pasted share text.
         input: String,
         /// Output directory; defaults to PARSE_KIT_OUTPUT_DIR or ./downloads.
-        #[arg(short, long, env = "PARSE_KIT_OUTPUT_DIR")]
+        #[arg(short, long)]
         output: Option<PathBuf>,
         /// Order for automatic source selection.
         #[arg(long, value_enum, default_value_t = Prefer::Best)]
@@ -84,7 +84,7 @@ pub enum Commands {
 pub enum BilibiliCmd {
     /// Scan a QR code with the Bilibili app; save cookie to `.env.local`.
     Login,
-    /// Remove `BILIBILI_COOKIE` from `.env.local` and the current process.
+    /// Remove `BILIBILI_COOKIE` from `.env.local`.
     Logout,
     /// Show whether a Bilibili cookie is loaded (local shape only).
     Status,
@@ -94,8 +94,22 @@ pub enum BilibiliCmd {
 pub enum WechatCmd {
     /// Scan a QR code with WeChat; save the Yuanbao cookie to `.env.local`.
     Login,
-    /// Remove `YUANBAO_COOKIE` from `.env.local` and the current process.
+    /// Remove `YUANBAO_COOKIE` from `.env.local`.
     Logout,
     /// Show whether a Yuanbao cookie is loaded (local shape only).
     Status,
+}
+
+#[cfg(test)]
+mod tests {
+    use clap::{Parser, error::ErrorKind};
+
+    use super::Cli;
+
+    #[test]
+    fn wechat_login_rejects_manual_cookie_arguments() {
+        let error = Cli::try_parse_from(["pk", "wechat", "login", "hy_user=manual"])
+            .expect_err("login must be QR-only");
+        assert_eq!(error.kind(), ErrorKind::UnknownArgument);
+    }
 }

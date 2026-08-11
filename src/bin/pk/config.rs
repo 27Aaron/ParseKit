@@ -1,78 +1,99 @@
 //! Load environment configuration and construct `ParseKit`.
 
-use std::path::{Path, PathBuf};
+use std::{
+    env,
+    path::{Path, PathBuf},
+};
 
-use parse_kit::{ParseKit, ParseKitBuilder, Result};
+use parse_kit::{Error, ParseKit, ParseKitBuilder, Result};
 
 /// Env key for Bilibili web cookie (`SESSDATA=...; bili_jct=...`).
-pub const BILIBILI_COOKIE_ENV: &str = "BILIBILI_COOKIE";
+const BILIBILI_COOKIE_ENV: &str = "BILIBILI_COOKIE";
 /// Env key for WeChat Channels via Yuanbao (`hy_user` / `hy_token` / …).
-pub const YUANBAO_COOKIE_ENV: &str = "YUANBAO_COOKIE";
+const YUANBAO_COOKIE_ENV: &str = "YUANBAO_COOKIE";
+const ENV_LOCAL_FILE: &str = ".env.local";
+const ENV_FILE: &str = ".env";
 
 /// Preferred path for CLI-written credentials (does not clobber hand-edited `.env`).
-pub fn env_local_path() -> PathBuf {
-    PathBuf::from(".env.local")
+pub fn env_local_path() -> &'static Path {
+    Path::new(ENV_LOCAL_FILE)
 }
 
-pub fn load_dotenv() {
-    let _ = dotenvy::from_filename(".env.local");
-    let _ = dotenvy::dotenv();
+pub fn load_dotenv() -> Result<()> {
+    load_dotenv_file(env_local_path())?;
+    load_dotenv_file(Path::new(ENV_FILE))
+}
+
+fn load_dotenv_file(path: &Path) -> Result<()> {
+    match dotenvy::from_path(path) {
+        Ok(_) => Ok(()),
+        Err(error) if error.not_found() => Ok(()),
+        Err(error) => {
+            let detail = dotenv_error_detail(error);
+            Err(Error::Config(format!(
+                "无法加载 {}: {detail}",
+                path.display()
+            )))
+        }
+    }
+}
+
+fn dotenv_error_detail(error: dotenvy::Error) -> String {
+    match error {
+        // dotenvy's Display includes the complete source line, which may
+        // contain a cookie. Report only the offset for parse failures.
+        dotenvy::Error::LineParse(_, offset) => format!("格式错误（位置 {offset}）"),
+        dotenvy::Error::Io(error) => error.to_string(),
+        dotenvy::Error::EnvVar(error) => error.to_string(),
+        _ => "未知错误".into(),
+    }
 }
 
 pub fn build_kit() -> Result<ParseKit> {
     let mut builder = ParseKitBuilder::new();
-    match std::env::var(YUANBAO_COOKIE_ENV) {
-        Ok(cookie) if !cookie.trim().is_empty() => {
-            builder = builder.wechat(cookie)?;
-        }
-        _ => {}
+    if let Some(cookie) = cookie_from_env(YUANBAO_COOKIE_ENV)? {
+        builder = builder.wechat(cookie)?;
     }
     builder = builder.douyin()?;
-    match std::env::var(BILIBILI_COOKIE_ENV) {
-        Ok(cookie) if !cookie.trim().is_empty() => {
-            builder = builder.bilibili_with_cookie(cookie)?;
-        }
-        _ => {
-            builder = builder.bilibili()?;
-        }
+    if let Some(cookie) = cookie_from_env(BILIBILI_COOKIE_ENV)? {
+        builder = builder.bilibili_with_cookie(cookie)?;
+    } else {
+        builder = builder.bilibili()?;
     }
     builder.build()
 }
 
+fn cookie_from_env(key: &str) -> Result<Option<String>> {
+    match env::var(key) {
+        Ok(value) if value.trim().is_empty() => Ok(None),
+        Ok(value) => Ok(Some(value)),
+        Err(env::VarError::NotPresent) => Ok(None),
+        Err(env::VarError::NotUnicode(_)) => {
+            Err(Error::Config(format!("{key} 必须是有效的 Unicode 字符串")))
+        }
+    }
+}
+
 pub fn default_output_dir() -> PathBuf {
-    std::env::var_os("PARSE_KIT_OUTPUT_DIR")
+    env::var_os("PARSE_KIT_OUTPUT_DIR")
         .map(PathBuf::from)
         .filter(|p| !p.as_os_str().is_empty())
         .unwrap_or_else(|| PathBuf::from("./downloads"))
 }
 
-/// Persist a cookie env key into `.env.local` and the current process env.
-pub fn save_cookie_env(key: &str, cookie: &str) -> Result<()> {
+/// Persist a cookie env key into `.env.local`.
+fn save_cookie_env(key: &str, cookie: &str) -> Result<()> {
     let path = env_local_path();
-    parse_kit::auth::upsert_dotenv_var(&path, key, cookie).map_err(|error| {
-        parse_kit::Error::Config(format!("无法写入 {}: {error}", path.display()))
-    })?;
-    // SAFETY: single-threaded CLI entry after dotenv load; only mutates our keys.
-    unsafe {
-        std::env::set_var(key, cookie);
-    }
+    parse_kit::auth::upsert_dotenv_var(path, key, cookie)
+        .map_err(|error| Error::Config(format!("无法写入 {}: {error}", path.display())))?;
     Ok(())
 }
 
-/// Remove a cookie env key from `.env.local` (and process env).
-pub fn clear_cookie_env(key: &str) -> Result<bool> {
+/// Remove a cookie env key from `.env.local`.
+fn clear_cookie_env(key: &str) -> Result<bool> {
     let path = env_local_path();
-    let removed = if path.exists() {
-        parse_kit::auth::remove_dotenv_var(Path::new(&path), key).map_err(|error| {
-            parse_kit::Error::Config(format!("无法更新 {}: {error}", path.display()))
-        })?
-    } else {
-        false
-    };
-    unsafe {
-        std::env::remove_var(key);
-    }
-    Ok(removed)
+    parse_kit::auth::remove_dotenv_var(path, key)
+        .map_err(|error| Error::Config(format!("无法更新 {}: {error}", path.display())))
 }
 
 pub fn save_bilibili_cookie(cookie: &str) -> Result<()> {
@@ -89,4 +110,17 @@ pub fn save_yuanbao_cookie(cookie: &str) -> Result<()> {
 
 pub fn clear_yuanbao_cookie() -> Result<bool> {
     clear_cookie_env(YUANBAO_COOKIE_ENV)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::dotenv_error_detail;
+
+    #[test]
+    fn dotenv_parse_errors_do_not_expose_secret_lines() {
+        let detail =
+            dotenv_error_detail(dotenvy::Error::LineParse("YUANBAO_COOKIE=secret".into(), 7));
+        assert_eq!(detail, "格式错误（位置 7）");
+        assert!(!detail.contains("secret"));
+    }
 }

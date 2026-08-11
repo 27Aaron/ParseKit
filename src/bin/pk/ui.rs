@@ -11,6 +11,7 @@
 //! ```
 
 use std::{
+    env,
     io::{self, IsTerminal, Write},
     sync::{
         Arc, Mutex,
@@ -18,6 +19,7 @@ use std::{
     },
     time::Duration,
 };
+use unicode_width::UnicodeWidthStr;
 
 const GREEN: &str = "\x1b[32m";
 const RED: &str = "\x1b[31m";
@@ -45,34 +47,62 @@ fn stdout_tty() -> bool {
     io::stdout().is_terminal()
 }
 
+pub(crate) fn stdout_color() -> bool {
+    stdout_tty() && colors_allowed()
+}
+
+fn stderr_color() -> bool {
+    io::stderr().is_terminal() && colors_allowed()
+}
+
+fn colors_allowed() -> bool {
+    env::var_os("NO_COLOR").is_none()
+}
+
 /// Immediate success line (no animation).
 pub fn ok(action: &str, detail: impl AsRef<str>) {
-    println!(
-        "{GREEN}{ICON_OK}{RESET}  {:<ACTION_WIDTH$}  {}",
-        action,
-        detail.as_ref()
-    );
+    if stdout_color() {
+        println!(
+            "{GREEN}{ICON_OK}{RESET}  {:<ACTION_WIDTH$}  {}",
+            action,
+            detail.as_ref()
+        );
+    } else {
+        println!("{ICON_OK}  {:<ACTION_WIDTH$}  {}", action, detail.as_ref());
+    }
     let _ = io::stdout().flush();
 }
 
 /// Immediate error line.
 pub fn err(action: &str, detail: impl AsRef<str>) {
-    eprintln!(
-        "{RED}{ICON_ERR}{RESET}  {:<ACTION_WIDTH$}  {}",
-        action,
-        detail.as_ref()
-    );
+    if stderr_color() {
+        eprintln!(
+            "{RED}{ICON_ERR}{RESET}  {:<ACTION_WIDTH$}  {}",
+            action,
+            detail.as_ref()
+        );
+    } else {
+        eprintln!("{ICON_ERR}  {:<ACTION_WIDTH$}  {}", action, detail.as_ref());
+    }
     let _ = io::stderr().flush();
 }
 
 /// Dim continuation / note (aligned under the detail column).
 pub fn note(message: impl AsRef<str>) {
-    eprintln!("{DIM}·{RESET}  {:<ACTION_WIDTH$}  {}", "", message.as_ref());
+    if stderr_color() {
+        eprintln!("{DIM}·{RESET}  {:<ACTION_WIDTH$}  {}", "", message.as_ref());
+    } else {
+        eprintln!("·  {:<ACTION_WIDTH$}  {}", "", message.as_ref());
+    }
 }
 
 /// Dim sub-line under a status row (e.g. long media URL).
 pub fn sub(detail: impl AsRef<str>) {
-    println!("{DIM}   {:<ACTION_WIDTH$}  {}{RESET}", "", detail.as_ref());
+    if stdout_color() {
+        println!("{DIM}   {:<ACTION_WIDTH$}  {}{RESET}", "", detail.as_ref());
+    } else {
+        println!("   {:<ACTION_WIDTH$}  {}", "", detail.as_ref());
+    }
     let _ = io::stdout().flush();
 }
 
@@ -84,8 +114,13 @@ pub async fn reveal_ok(action: &str, detail: impl AsRef<str>) {
         return;
     }
 
+    let color = stdout_color();
     for frame in FRAMES.iter().cycle().take(REVEAL_SPIN_FRAMES) {
-        print!("\r{CYAN}{frame}{RESET}  {action:<ACTION_WIDTH$}  {detail}   ");
+        if color {
+            print!("\r{CYAN}{frame}{RESET}  {action:<ACTION_WIDTH$}  {detail}   ");
+        } else {
+            print!("\r{frame}  {action:<ACTION_WIDTH$}  {detail}   ");
+        }
         let _ = io::stdout().flush();
         tokio::time::sleep(Duration::from_millis(REVEAL_SPIN_MS)).await;
     }
@@ -112,31 +147,16 @@ pub async fn reveal_sub(detail: impl AsRef<str>) {
 /// Aligned platform row for `platforms` / `doctor`.
 pub fn platform_row(id: &str, name: &str, note: &str) {
     let name_aligned = pad_display(name, 14);
-    println!("{GREEN}{ICON_OK}{RESET}  {id:<10}  {name_aligned}  ·  {DIM}{note}{RESET}");
+    if stdout_color() {
+        println!("{GREEN}{ICON_OK}{RESET}  {id:<10}  {name_aligned}  ·  {DIM}{note}{RESET}");
+    } else {
+        println!("{ICON_OK}  {id:<10}  {name_aligned}  ·  {note}");
+    }
 }
 
-/// Terminal display width (ASCII 1, CJK / fullwidth 2).
+/// Terminal display width according to Unicode's terminal-width tables.
 pub fn display_width(text: &str) -> usize {
-    text.chars()
-        .map(|ch| {
-            let u = ch as u32;
-            if ch.is_ascii() {
-                1
-            } else if (0x1100..=0x115F).contains(&u)
-                || (0x2E80..=0xA4CF).contains(&u)
-                || (0xAC00..=0xD7A3).contains(&u)
-                || (0xF900..=0xFAFF).contains(&u)
-                || (0xFE10..=0xFE6F).contains(&u)
-                || (0xFF00..=0xFF60).contains(&u)
-                || (0xFFE0..=0xFFE6).contains(&u)
-                || (0x20000..=0x2FFFD).contains(&u)
-            {
-                2
-            } else {
-                1
-            }
-        })
-        .sum()
+    UnicodeWidthStr::width(text)
 }
 
 /// Pad `text` on the right to at least `width` terminal columns.
@@ -183,13 +203,21 @@ impl Spinner {
         let text = Arc::new(Mutex::new(message));
         let flag = Arc::clone(&stop);
         let label = Arc::clone(&text);
+        let color = stderr_color();
         let handle = tokio::spawn(async move {
             let mut frame = 0usize;
             while !flag.load(Ordering::Relaxed) {
                 let glyph = FRAMES[frame % FRAMES.len()];
-                let message = label.lock().map(|g| g.clone()).unwrap_or_default();
-                eprint!("\r{CYAN}{glyph}{RESET}  {message}   ");
-                let _ = io::stderr().flush();
+                {
+                    let message = label.lock();
+                    let message = message.as_deref().map(String::as_str).unwrap_or_default();
+                    if color {
+                        eprint!("\r{CYAN}{glyph}{RESET}  {message}   ");
+                    } else {
+                        eprint!("\r{glyph}  {message}   ");
+                    }
+                    let _ = io::stderr().flush();
+                }
                 frame = frame.wrapping_add(1);
                 tokio::time::sleep(Duration::from_millis(80)).await;
             }
@@ -288,18 +316,46 @@ pub fn download_progress_label(percent: u8, downloaded: u64, total: u64) -> Stri
 }
 
 pub fn one_line(text: &str, max_chars: usize) -> String {
-    let collapsed: String = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    let mut words = text.split_whitespace();
+    let mut collapsed = words.next().unwrap_or_default().to_owned();
+    for word in words {
+        collapsed.push(' ');
+        collapsed.push_str(word);
+    }
     if max_chars == 0 {
         return collapsed;
     }
-    let count = collapsed.chars().count();
-    if count <= max_chars {
+
+    let mut chars = collapsed.char_indices();
+    let Some((truncate_at, _)) = chars.nth(max_chars - 1) else {
+        return collapsed;
+    };
+    if chars.next().is_none() {
         return collapsed;
     }
-    let mut out: String = collapsed
-        .chars()
-        .take(max_chars.saturating_sub(1))
-        .collect();
-    out.push('…');
-    out
+    collapsed.truncate(truncate_at);
+    collapsed.push('…');
+    collapsed
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{display_width, one_line, pad_display};
+
+    #[test]
+    fn display_width_handles_wide_and_combining_characters() {
+        assert_eq!(display_width("abc"), 3);
+        assert_eq!(display_width("你好"), 4);
+        assert_eq!(display_width("e\u{301}"), 1);
+        assert_eq!(pad_display("好", 4), "好  ");
+    }
+
+    #[test]
+    fn one_line_collapses_and_truncates_unicode_without_extra_spaces() {
+        assert_eq!(one_line("  hello\n  world  ", 20), "hello world");
+        assert_eq!(one_line("你好世界", 3), "你好…");
+        assert_eq!(one_line("abc", 3), "abc");
+        assert_eq!(one_line("abc", 1), "…");
+        assert_eq!(one_line("abc", 0), "abc");
+    }
 }

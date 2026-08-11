@@ -17,6 +17,7 @@ cli = [
     "dep:jpeg-decoder",
     "dep:qrcode",
     "dep:tracing-subscriber",
+    "dep:unicode-width",
 ]
 
 [[bin]]
@@ -25,7 +26,7 @@ path = "src/bin/pk/main.rs"
 required-features = ["cli"]
 
 [dependencies]
-clap = { version = "4", features = ["derive", "env"], optional = true }
+clap = { version = "4", features = ["derive"], optional = true }
 dotenvy = { version = "0.15", optional = true }
 jpeg-decoder = { version = "0.3", optional = true }
 qrcode = { version = "0.14", default-features = false, optional = true }
@@ -38,6 +39,7 @@ thiserror = "2"
 tokio = { version = "1", features = ["fs", "io-util", "macros", "net", "process", "rt-multi-thread", "sync", "time"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"], optional = true }
+unicode-width = { version = "0.2", optional = true }
 url = "2"
 uuid = { version = "1", features = ["v4"] }
 
