@@ -108,9 +108,10 @@ mod tests {
 
     #[test]
     fn share_page_drops_trackers() {
-        let raw =
-            Url::parse("https://www.bilibili.com/video/BV1GJ411x7h7?utm_source=copy&spm_id_from=333")
-                .unwrap();
+        let raw = Url::parse(
+            "https://www.bilibili.com/video/BV1GJ411x7h7?utm_source=copy&spm_id_from=333",
+        )
+        .unwrap();
         let cleaned = clean_tracking_params(&raw, CleanPolicy::SHARE_PAGE);
         assert_eq!(cleaned.query(), Some("spm_id_from=333"));
     }

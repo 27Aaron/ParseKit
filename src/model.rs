@@ -297,8 +297,7 @@ pub fn download_file_stem(platform: PlatformId, canonical_url: &Url, post_id: &s
         .path_segments()
         .into_iter()
         .flatten()
-        .filter(|segment| !segment.is_empty())
-        .next_back();
+        .rfind(|segment| !segment.is_empty());
     let slug = sanitize_filename_component(from_canonical.unwrap_or(post_id));
     let slug = if slug.is_empty() {
         sanitize_filename_component(post_id)

@@ -468,14 +468,13 @@ impl MediaDownloader {
 
             // Upgrade provisional `.bin` using Content-Type when the URL had no suffix.
             if resume_from == 0 {
-                if let Some(content_type) = response
+                if let Some(ext) = response
                     .headers()
                     .get(reqwest::header::CONTENT_TYPE)
                     .and_then(|value| value.to_str().ok())
+                    .and_then(extension_from_content_type)
                 {
-                    if let Some(ext) = extension_from_content_type(content_type) {
-                        path = path_with_better_extension(path, ext);
-                    }
+                    path = path_with_better_extension(path, ext);
                 }
                 // Encrypted WeChat prefixes are always BMFF video containers.
                 if decode_key.is_some() {

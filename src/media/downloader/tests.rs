@@ -36,7 +36,8 @@ fn test_workspace() -> std::path::PathBuf {
 #[test]
 fn with_allowed_hosts_normalizes_and_exposes_the_set() {
     let downloader =
-        MediaDownloader::with_allowed_hosts(test_workspace(), ["Example.COM", "cdn.example.org"]).unwrap();
+        MediaDownloader::with_allowed_hosts(test_workspace(), ["Example.COM", "cdn.example.org"])
+            .unwrap();
 
     assert!(downloader.allowed_hosts().contains("example.com"));
     assert!(downloader.allowed_hosts().contains("cdn.example.org"));
@@ -110,9 +111,11 @@ fn for_douyin_uses_reviewed_host_set() {
 
 #[test]
 fn for_platform_maps_known_ids() {
-    let wechat = MediaDownloader::for_platform(crate::PlatformId::Wechat, test_workspace()).unwrap();
+    let wechat =
+        MediaDownloader::for_platform(crate::PlatformId::Wechat, test_workspace()).unwrap();
     assert!(wechat.allowed_hosts().contains("finder.video.qq.com"));
-    let douyin = MediaDownloader::for_platform(crate::PlatformId::Douyin, test_workspace()).unwrap();
+    let douyin =
+        MediaDownloader::for_platform(crate::PlatformId::Douyin, test_workspace()).unwrap();
     assert!(douyin.allowed_hosts().contains("aweme.snssdk.com"));
     let _ = MediaDownloader::for_platform(crate::PlatformId::Bilibili, test_workspace()).unwrap();
 }
@@ -492,10 +495,8 @@ fn extension_from_url_guesses_common_types() {
     // WeChat Channels CDN: extension-less stodownload paths.
     assert_eq!(
         extension_from_url(
-            &Url::parse(
-                "https://finder.video.qq.com/251/20302/stodownload?encfilekey=k&token=t"
-            )
-            .unwrap()
+            &Url::parse("https://finder.video.qq.com/251/20302/stodownload?encfilekey=k&token=t")
+                .unwrap()
         ),
         "mp4"
     );
@@ -518,7 +519,10 @@ fn extension_from_content_type_maps_common_mimes() {
         Some("mp4")
     );
     assert_eq!(extension_from_content_type("image/jpeg"), Some("jpg"));
-    assert_eq!(extension_from_content_type("application/octet-stream"), None);
+    assert_eq!(
+        extension_from_content_type("application/octet-stream"),
+        None
+    );
 }
 
 #[test]

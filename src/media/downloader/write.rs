@@ -64,7 +64,10 @@ pub(super) fn extension_from_url(url: &url::Url) -> &'static str {
     {
         return "mp4";
     }
-    if path.contains("image") || path.contains("cover") || path.contains("thumb") || path.contains("pic")
+    if path.contains("image")
+        || path.contains("cover")
+        || path.contains("thumb")
+        || path.contains("pic")
     {
         return "jpg";
     }
