@@ -96,10 +96,7 @@ mod tests {
 
     #[test]
     fn display_title_prefers_non_empty_title() {
-        assert_eq!(
-            display_title_for_post("douyin", Some("  标题  ")),
-            "标题"
-        );
+        assert_eq!(display_title_for_post("douyin", Some("  标题  ")), "标题");
         assert_eq!(
             display_title_for_post("wechat_channels", None),
             "微信视频号视频"
