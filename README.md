@@ -11,7 +11,8 @@ just resolve '分享链接'
 just download '分享链接'
 ```
 
-凭据（写入 `.env.local`，也可用手写 `.env`）：
+扫码登录会将凭据写入 `.env.local`；也可直接设置环境变量
+`YUANBAO_COOKIE` / `BILIBILI_COOKIE`：
 
 ```bash
 pk wechat login              # 微信扫码 → YUANBAO_COOKIE

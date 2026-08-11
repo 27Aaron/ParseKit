@@ -68,12 +68,12 @@ pub enum Commands {
     },
     /// Check local credentials and registered platforms.
     Doctor,
-    /// Bilibili account helpers (cookie / QR login).
+    /// Bilibili account helpers.
     Bilibili {
         #[command(subcommand)]
         command: BilibiliCmd,
     },
-    /// WeChat Channels helpers (Yuanbao cookie).
+    /// WeChat Channels account helpers.
     Wechat {
         #[command(subcommand)]
         command: WechatCmd,
@@ -93,12 +93,7 @@ pub enum BilibiliCmd {
 #[derive(Debug, Subcommand)]
 pub enum WechatCmd {
     /// Scan a QR code with WeChat; save the Yuanbao cookie to `.env.local`.
-    ///
-    /// Passing a cookie explicitly keeps the manual fallback available.
-    Login {
-        /// Optional full Cookie header value; omit it to use QR login.
-        cookie: Option<String>,
-    },
+    Login,
     /// Remove `YUANBAO_COOKIE` from `.env.local` and the current process.
     Logout,
     /// Show whether a Yuanbao cookie is loaded (local shape only).

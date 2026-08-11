@@ -341,7 +341,7 @@ async fn exchange_code_for_cookie(
     }
 
     Err(Error::Network(
-        "扫码成功但未拿到元宝登录 Cookie，请重试或暂时使用手动 Cookie".into(),
+        "扫码成功但未拿到元宝登录 Cookie，请重试".into(),
     ))
 }
 

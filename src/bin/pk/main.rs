@@ -50,7 +50,7 @@ fn main() -> ExitCode {
                 BilibiliCmd::Status => commands::bilibili_status(),
             },
             Commands::Wechat { command } => match command {
-                WechatCmd::Login { cookie } => commands::wechat_login(cookie).await,
+                WechatCmd::Login => commands::wechat_login().await,
                 WechatCmd::Logout => commands::wechat_logout(),
                 WechatCmd::Status => commands::wechat_status(),
             },

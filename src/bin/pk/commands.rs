@@ -418,17 +418,7 @@ fn print_health(kit: &parse_kit::ParseKit) {
 }
 
 /// WeChat QR login → write `YUANBAO_COOKIE` into `.env.local`.
-///
-/// An explicit cookie argument remains available as a manual fallback.
-pub async fn wechat_login(cookie_arg: Option<String>) -> Result<()> {
-    if let Some(cookie) = cookie_arg {
-        let cookie = cookie.trim();
-        if cookie.is_empty() {
-            return Err(parse_kit::Error::Config("cookie 参数为空".into()));
-        }
-        return save_yuanbao_cookie(cookie);
-    }
-
+pub async fn wechat_login() -> Result<()> {
     ui::note("requesting Yuanbao WeChat QR login…");
     let session = wechat::start_web_qr_login().await?;
     print_yuanbao_qr(&session);
@@ -438,27 +428,7 @@ pub async fn wechat_login(cookie_arg: Option<String>) -> Result<()> {
     let cookie =
         wechat::wait_web_qr_login(&session, Duration::from_secs(1), Duration::from_secs(180))
             .await?;
-    save_yuanbao_cookie(cookie.as_str())
-}
-
-fn save_yuanbao_cookie(cookie: &str) -> Result<()> {
-    match wechat::assess_yuanbao_cookie(cookie) {
-        CredentialStatus::Present => {}
-        CredentialStatus::Incomplete => {
-            ui::err(
-                "cookie",
-                "missing hy_user / token markers — save aborted (paste full Cookie header)",
-            );
-            return Err(parse_kit::Error::Config(
-                "YUANBAO_COOKIE 形态不完整，未写入".into(),
-            ));
-        }
-        CredentialStatus::Absent => {
-            return Err(parse_kit::Error::Config("cookie 为空".into()));
-        }
-    }
-
-    config::save_yuanbao_cookie(cookie)?;
+    config::save_yuanbao_cookie(cookie.as_str())?;
     let path = config::env_local_path();
     ui::ok(
         "login",
@@ -557,7 +527,7 @@ pub fn bilibili_status() -> Result<()> {
                 ui::err("bilibili", "BILIBILI_COOKIE set but missing SESSDATA");
             }
             CredentialStatus::Absent => {
-                ui::note("bilibili anonymous — paste cookie into .env or run: pk bilibili login");
+                ui::note("bilibili anonymous — set BILIBILI_COOKIE or run: pk bilibili login");
             }
         },
     }

@@ -331,7 +331,7 @@ fn has_sessdata(pairs: &[(String, String)]) -> bool {
 fn credential_from_pairs(pairs: &[(String, String)]) -> Result<CookieCredential> {
     if !has_sessdata(pairs) {
         return Err(Error::Network(
-            "登录成功但未拿到 SESSDATA（cookie 交换失败，请重试或手动粘贴 Cookie）".into(),
+            "登录成功但未拿到 SESSDATA（cookie 交换失败，请重试）".into(),
         ));
     }
     let header = pairs
