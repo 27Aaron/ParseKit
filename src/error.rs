@@ -12,7 +12,7 @@ pub enum Error {
     #[error("暂不支持这个链接")]
     UnsupportedUrl,
 
-    #[error("解析凭据已失效，请更新元宝 Cookie")]
+    #[error("解析凭据已失效，请更新登录信息")]
     LoginRequired,
 
     #[error("内容不存在、已删除或不可见")]

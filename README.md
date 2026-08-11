@@ -12,7 +12,7 @@
 | 微信视频号 | ✅ | 需元宝 Cookie |
 | 抖音 | ✅ 视频 | 分享页解析；图集/笔记暂不支持 |
 
-后续计划：快手、B 站等。新平台实现 `PlatformResolver`，挂到 `platforms::Platform` 并在 `ParseHub::new` 注册即可（见 `src/platforms/mod.rs`）。
+后续计划：快手、B 站等。新平台实现 `PlatformResolver`，挂到 `platforms::Platform` 并用 `ParseHub::builder` 注册即可（见 `src/platforms/mod.rs`）。
 
 ## 作为依赖使用
 
@@ -26,10 +26,13 @@ use parse_core::{ParseHub, media::MediaDownloader};
 
 #[tokio::main]
 async fn main() -> parse_core::Result<()> {
+    // Full hub (WeChat + Douyin). Cookie only needed when WeChat is registered.
     let hub = ParseHub::new(std::env::var("WECHAT_YUANBAO_COOKIE").unwrap())?;
+    // Or Douyin-only: ParseHub::builder().douyin()?.build()?
+
     let post = hub.resolve_text("分享文案或链接…").await?;
 
-    // CDN allowlist is explicit per platform.
+    // CDN allowlist is explicit per platform (owned by platforms/*, not model).
     let _downloader = match post.platform.as_str() {
         "douyin" => MediaDownloader::for_douyin("/tmp/parse-media", 200 * 1024 * 1024)?,
         _ => MediaDownloader::for_wechat_channels("/tmp/parse-media", 200 * 1024 * 1024)?,
@@ -42,6 +45,15 @@ async fn main() -> parse_core::Result<()> {
 相关产品：
 
 - [parse_bot](https://github.com/27Aaron/parse_bot) — Telegram 交付壳
+
+## 模块边界
+
+| 层 | 放什么 | 不放什么 |
+|----|--------|----------|
+| `model` | 跨平台结果类型 | CDN 名单、cookie、平台文案 |
+| `media` | 通用下载 / probe | 平台专属加解密细节（仅 re-export） |
+| `platforms/<name>` | 解析、hosts、identity、专属逻辑 | 交付产品（Bot）细节 |
+| `hub` | 多平台注册与分发 | 上游协议细节 |
 
 ## 开发
 
