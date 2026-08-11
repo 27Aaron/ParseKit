@@ -56,7 +56,7 @@ let post = kit.resolve_text("分享文案或链接").await?;
 assert_eq!(post.platform, PlatformId::Douyin); // 或 WechatChannels / Bilibili
 let sources: Vec<_> = post.media_sources().collect();
 let dir = std::path::Path::new("./downloads");
-let downloader = kit.media_downloader_for(&post, dir, 200 * 1024 * 1024)?;
+let downloader = kit.media_downloader_for(&post, dir, None)?; // None = unlimited
 let media = downloader.download_playable(sources).await?;
 # let _ = media;
 # Ok(())

@@ -4,8 +4,6 @@ use std::path::PathBuf;
 
 use parse_kit::{ParseKit, ParseKitBuilder, Result};
 
-const DEFAULT_MAX_BYTES: u64 = 200 * 1024 * 1024;
-
 pub fn load_dotenv() {
     let _ = dotenvy::from_filename(".env.local");
     let _ = dotenvy::dotenv();
@@ -31,10 +29,10 @@ pub fn default_output_dir() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("./downloads"))
 }
 
-pub fn default_max_bytes() -> u64 {
+/// Optional download size cap from env (`None` / unset = unlimited).
+pub fn env_max_bytes() -> Option<u64> {
     std::env::var("PARSE_KIT_MAX_BYTES")
         .ok()
         .and_then(|v| v.parse().ok())
         .filter(|v| *v > 0)
-        .unwrap_or(DEFAULT_MAX_BYTES)
 }
