@@ -8,5 +8,8 @@ rustc-ice-*.txt
 .env.local
 .env.*.local
 
+# Local planning / notes (never publish)
+/Todo/
+
 # macOS
 .DS_Store
