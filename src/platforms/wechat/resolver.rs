@@ -1,11 +1,4 @@
-//! Resolve WeChat Channels links through Yuanbao and feed APIs.
-
-mod build;
-mod share;
-mod util;
-
-#[cfg(test)]
-mod tests;
+//! Network orchestration for WeChat Channels links.
 
 use std::{
     sync::Arc,
@@ -15,22 +8,31 @@ use std::{
 use reqwest::{
     Client,
     header::{ACCEPT, ACCEPT_LANGUAGE, CONTENT_TYPE, COOKIE, ORIGIN, REFERER, USER_AGENT},
-    redirect::Policy,
 };
 use serde_json::Value;
 use url::Url;
 use uuid::Uuid;
 
-use crate::{Error, PlatformId, ResolvedPost, Result, platforms::PlatformResolver};
-
-use self::build::build_post;
-use self::share::{endpoint_is_loopback_http, normalize_share_url, query_value};
-use self::util::{
-    FeedBaseRequest, FeedRequest, ParseData, ParseRequest, cookie_value, map_network_error,
-    map_status, non_empty, read_json, response_looks_like_login, value_to_text,
+use crate::{
+    Error, ResolvedPost, Result,
+    platforms::{
+        PlatformResolver, PlatformSpec,
+        util::{DEFAULT_RESOLVE_TIMEOUT, resolve_with_timeout, resolver_http_client},
+    },
 };
 
-pub use self::share::{derive_direct_media_url, extract_share_url};
+use super::{
+    SPEC,
+    api::{
+        FeedBaseRequest, FeedRequest, ParseData, ParseRequest, cookie_value, map_network_error,
+        map_status, non_empty, read_json, response_looks_like_login, value_to_text,
+    },
+    parse::build_post,
+    share::{
+        NormalizedShareUrl, endpoint_is_loopback_http, extract_share_url, normalize_share_url,
+        query_value,
+    },
+};
 
 const PARSE_ENDPOINT: &str = "https://yuanbao.tencent.com/api/weixin/get_parse_result";
 const FEED_ENDPOINT: &str = "https://channels.weixin.qq.com/finder-preview/api/feed/get_feed_info";
@@ -43,7 +45,7 @@ const USER_AGENT_VALUE: &str = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) 
     AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36";
 const SEC_CH_UA_VALUE: &str =
     r#""Chromium";v="148", "Google Chrome";v="148", "Not/A)Brand";v="99""#;
-const RESOLVE_TIMEOUT: Duration = Duration::from_secs(30);
+const RESOLVE_TIMEOUT: Duration = DEFAULT_RESOLVE_TIMEOUT;
 
 #[derive(Clone)]
 pub struct WechatResolver {
@@ -112,13 +114,7 @@ impl WechatResolver {
             }
         }
 
-        let client = Client::builder()
-            .connect_timeout(Duration::from_secs(10))
-            .timeout(timeout)
-            .redirect(Policy::none())
-            .no_proxy()
-            .build()
-            .map_err(|_| Error::Config("无法初始化视频号 HTTP 客户端".into()))?;
+        let client = resolver_http_client(timeout, "无法初始化视频号 HTTP 客户端")?;
 
         Ok(Self {
             client,
@@ -131,8 +127,7 @@ impl WechatResolver {
 
     pub async fn resolve_text(&self, input: &str) -> Result<ResolvedPost> {
         let url = extract_share_url(input)?;
-        let normalized = normalize_share_url(&url)?;
-        self.resolve_share_url(normalized).await
+        self.resolve_url(&url).await
     }
 
     pub async fn resolve_url(&self, url: &Url) -> Result<ResolvedPost> {
@@ -140,19 +135,16 @@ impl WechatResolver {
         self.resolve_share_url(normalized).await
     }
 
-    async fn resolve_share_url(
-        &self,
-        normalized: self::share::NormalizedShareUrl,
-    ) -> Result<ResolvedPost> {
-        tokio::time::timeout(self.timeout, self.resolve_normalized(normalized))
-            .await
-            .map_err(|_| Error::Network("视频号解析总超时".into()))?
+    async fn resolve_share_url(&self, normalized: NormalizedShareUrl) -> Result<ResolvedPost> {
+        resolve_with_timeout(
+            self.timeout,
+            self.resolve_normalized(normalized),
+            "视频号解析总超时",
+        )
+        .await
     }
 
-    async fn resolve_normalized(
-        &self,
-        normalized: self::share::NormalizedShareUrl,
-    ) -> Result<ResolvedPost> {
+    async fn resolve_normalized(&self, normalized: NormalizedShareUrl) -> Result<ResolvedPost> {
         let parse_data = self.request_parse(&normalized.canonical_url).await?;
         let playable_url =
             Url::parse(parse_data.playable_url.trim()).map_err(|_| Error::UpstreamChanged)?;
@@ -310,16 +302,8 @@ impl WechatResolver {
 }
 
 impl PlatformResolver for WechatResolver {
-    fn platform_id(&self) -> PlatformId {
-        PlatformId::Wechat
-    }
-
-    fn extract_share_url(&self, input: &str) -> Result<Url> {
-        extract_share_url(input)
-    }
-
-    async fn resolve_text(&self, input: &str) -> Result<ResolvedPost> {
-        WechatResolver::resolve_text(self, input).await
+    fn spec(&self) -> &'static PlatformSpec {
+        &SPEC
     }
 
     async fn resolve_url(&self, url: &Url) -> Result<ResolvedPost> {

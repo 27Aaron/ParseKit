@@ -5,7 +5,13 @@ use url::Url;
 
 use crate::{Error, Result, platforms::util::trim_url_candidate};
 
-use super::REDIRECT_HOSTS;
+const REDIRECT_HOSTS: &[&str] = &[
+    "v.douyin.com",
+    "www.douyin.com",
+    "m.douyin.com",
+    "www.iesdouyin.com",
+    "iesdouyin.com",
+];
 
 pub fn extract_share_url(input: &str) -> Result<Url> {
     static URL_PATTERN: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();

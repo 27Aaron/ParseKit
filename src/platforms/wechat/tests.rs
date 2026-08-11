@@ -1,16 +1,17 @@
-//! Tests for the WeChat resolver.
+//! Tests for the WeChat platform adapter.
 
-use super::build::{build_post, has_matching_media_identity, merge_source_metadata};
+use super::api::{ParseData, cookie_value};
+use super::parse::{build_post, has_matching_media_identity, merge_source_metadata};
 use super::share::{
     NormalizedShareUrl, derive_direct_media_url, extract_share_url, normalize_share_url,
 };
-use super::util::{ParseData, cookie_value};
 use crate::{
     Error,
     model::{MediaSource, MediaSourceKind, VideoCodec},
-    platforms::wechat::hosts::REVIEWED_MEDIA_HOSTS,
 };
 use ::url::Url;
+
+use super::hosts::REVIEWED_MEDIA_HOSTS;
 
 #[test]
 fn extracts_and_canonicalizes_share_url_from_text() {
@@ -148,7 +149,7 @@ fn builds_post_from_feed_fixture_and_derives_media_from_preferred_h264_seed() {
                 .to_owned(),
     };
     let feed: serde_json::Value = serde_json::from_str(include_str!(
-        "../../../../tests/fixtures/wechat/feed_h264_preferred.json"
+        "../../../tests/fixtures/wechat/feed_h264_preferred.json"
     ))
     .expect("committed wechat feed fixture");
 

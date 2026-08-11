@@ -1,12 +1,14 @@
 //! Tests for the Douyin resolver.
 
 use super::{
+    extract_share_url,
     parse::{
         build_post_from_router, parse_any_page_data, parse_router_data, remove_video_watermark,
     },
     share::extract_aweme_id,
-    *,
 };
+use crate::{Error, PlatformId};
+use url::Url;
 
 #[test]
 fn extracts_urls_from_share_text() {

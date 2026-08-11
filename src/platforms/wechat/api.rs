@@ -1,4 +1,4 @@
-//! JSON, cookie, and HTTP response helpers for WeChat resolution.
+//! Yuanbao and WeChat API payload, cookie, and response helpers.
 
 use reqwest::{Response, StatusCode};
 use serde::{Deserialize, Serialize};
