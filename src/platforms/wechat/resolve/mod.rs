@@ -1,4 +1,4 @@
-//! WeChat Channels resolve (Yuanbao parse + feed).
+//! Resolve WeChat Channels links through Yuanbao and feed APIs.
 
 mod build;
 mod share;
@@ -64,12 +64,12 @@ impl std::fmt::Debug for WechatResolver {
     }
 }
 
-/// Local (non-network) view of whether a Yuanbao cookie looks usable.
+/// A local assessment of whether a Yuanbao cookie contains session markers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WechatCredentialStatus {
-    /// Missing obvious session keys.
+    /// No recognized session marker is present.
     Incomplete,
-    /// Has hy_user / common session markers (not a guarantee of validity).
+    /// At least one marker is present; upstream may still reject the cookie.
     Present,
 }
 
@@ -82,7 +82,7 @@ impl WechatResolver {
         )
     }
 
-    /// Inspect cookie shape without calling upstream (never logs cookie values).
+    /// Checks cookie structure without network access or logging cookie values.
     pub fn credential_status(&self) -> WechatCredentialStatus {
         let has_user = cookie_value(&self.cookie, "hy_user").is_some();
         let has_session = cookie_value(&self.cookie, "token").is_some()

@@ -1,4 +1,4 @@
-//! CLI argument definitions.
+//! Command-line interface definitions.
 
 use std::path::PathBuf;
 
@@ -11,7 +11,7 @@ use clap::{Parser, Subcommand, ValueEnum};
     about = "ParseKit CLI — resolve and download social media posts"
 )]
 pub struct Cli {
-    /// Enable tracing logs on stderr (RUST_LOG still respected if set).
+    /// Write tracing logs to stderr; respect RUST_LOG when set.
     #[arg(long, short = 'v', global = true)]
     pub verbose: bool,
 
@@ -21,51 +21,51 @@ pub struct Cli {
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
 pub enum Prefer {
-    /// Highest quality first (default).
+    /// Try the highest-quality source first.
     Best,
-    /// Smallest / lowest quality first.
+    /// Try the smallest source first.
     Smallest,
 }
 
 #[derive(Debug, Subcommand)]
 pub enum Commands {
-    /// Resolve share text or URL (print summary / JSON).
+    /// Resolve a share URL or pasted share text.
     Resolve {
-        /// Share text or URL.
+        /// Share URL or pasted share text.
         input: String,
-        /// Print full JSON instead of a short summary.
+        /// Emit the complete result as JSON.
         #[arg(long)]
         json: bool,
     },
-    /// Resolve and download media (video playable or all images for image sets).
+    /// Resolve and download a playable video or image set.
     Download {
-        /// Share text or URL.
+        /// Share URL or pasted share text.
         input: String,
-        /// Output directory (default: PARSE_KIT_OUTPUT_DIR or ./downloads).
+        /// Output directory; defaults to PARSE_KIT_OUTPUT_DIR or ./downloads.
         #[arg(short, long, env = "PARSE_KIT_OUTPUT_DIR")]
         output: Option<PathBuf>,
-        /// Max bytes (default: PARSE_KIT_MAX_BYTES or 200 MiB).
+        /// Maximum size in bytes; defaults to PARSE_KIT_MAX_BYTES or 200 MiB.
         #[arg(long, env = "PARSE_KIT_MAX_BYTES")]
         max_bytes: Option<u64>,
-        /// Which source to try first: best (default) or smallest.
+        /// Order for automatic source selection.
         #[arg(long, value_enum, default_value_t = Prefer::Best)]
         prefer: Prefer,
-        /// Download only this source index from `pk resolve` (0-based).
+        /// Download one source by its zero-based index from pk resolve.
         #[arg(long)]
         source: Option<usize>,
-        /// For image sets, download only the first image (default: all).
+        /// Download only the first image in an image set.
         #[arg(long)]
         first_only: bool,
-        /// Print machine-readable JSON.
+        /// Emit the result as JSON.
         #[arg(long)]
         json: bool,
     },
-    /// List registered platforms for this build.
+    /// List the platform resolvers included in this build.
     Platforms {
-        /// Also print credential / health notes.
+        /// Include credential and capability status.
         #[arg(long)]
         check: bool,
     },
-    /// Local health check (cookie shape, registered platforms).
+    /// Check local credentials and registered platforms.
     Doctor,
 }

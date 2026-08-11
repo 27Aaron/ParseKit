@@ -15,7 +15,7 @@ pub(crate) fn format_title(title: Option<&str>, fallback: &str) -> String {
         .collect()
 }
 
-/// Stable platform identifier (serde uses the public string tags).
+/// Stable platform identifier serialized with public string tags.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum PlatformId {
     #[serde(rename = "wechat_channels")]
@@ -177,7 +177,9 @@ impl fmt::Debug for MediaSource {
     }
 }
 
-/// Resolved post. Prefer [`Self::new_video`] / [`Self::new_image_set`] so `kind` and `media` stay consistent.
+/// A normalized post returned by a platform resolver.
+///
+/// Use [`Self::new_video`] or [`Self::new_image_set`] to keep `kind` and `media` consistent.
 #[derive(Clone)]
 pub struct ResolvedPost {
     pub platform: PlatformId,
@@ -254,7 +256,7 @@ impl ResolvedPost {
         })
     }
 
-    /// All media sources in play order (primary video first, then fallbacks / other items).
+    /// Iterates sources in playback order: primary, fallbacks, then other items.
     pub fn media_sources(&self) -> impl Iterator<Item = &MediaSource> {
         self.media.iter().flat_map(MediaItem::iter_sources)
     }
@@ -265,7 +267,7 @@ impl ResolvedPost {
             .find_map(|item| item.as_video().map(|(primary, _)| primary))
     }
 
-    /// Fallback video sources for the first video item (excludes primary).
+    /// Returns fallback sources for the first video item, excluding its primary source.
     pub fn video_fallbacks(&self) -> &[MediaSource] {
         self.media
             .iter()

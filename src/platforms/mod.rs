@@ -1,13 +1,13 @@
-//! Platform resolvers.
+//! Resolver implementations for supported platforms.
 //!
-//! ## Adding a platform
+//! To add a platform:
 //!
 //! 1. Implement [`PlatformResolver`] under `platforms/<name>/`.
-//! 2. Add a [`Platform`] variant and match arms (`display_name`, `capability_note`, …).
-//! 3. Register on [`crate::ParseKitBuilder`]; optional entry in [`STATELESS_EXTRACTORS`].
-//! 4. Review media hosts and wire [`crate::media::MediaDownloader::for_platform`].
-//! 5. Unit + fixture tests; live tests stay `#[ignore]`.
-//! 6. Update README platform table.
+//! 2. Add a [`Platform`] variant and delegate its methods.
+//! 3. Register it with [`crate::ParseKitBuilder`] and, when applicable, [`STATELESS_EXTRACTORS`].
+//! 4. Review its media hosts and update [`crate::media::MediaDownloader::for_platform`].
+//! 5. Add unit and fixture tests; keep live tests ignored by default.
+//! 6. Update the platform table in the README.
 
 use std::future::Future;
 
@@ -24,7 +24,7 @@ pub use bilibili::BilibiliResolver;
 pub use douyin::DouyinResolver;
 pub use wechat::WechatResolver;
 
-/// Match order for share text (WeChat, then Douyin, then Bilibili).
+/// Share-text extractors in deterministic matching order.
 pub const STATELESS_EXTRACTORS: &[fn(&str) -> Result<Url>] = &[
     wechat::extract_share_url,
     douyin::extract_share_url,
@@ -34,7 +34,7 @@ pub const STATELESS_EXTRACTORS: &[fn(&str) -> Result<Url>] = &[
 pub trait PlatformResolver {
     fn platform_id(&self) -> PlatformId;
 
-    /// `UnsupportedUrl` if this platform does not own the input.
+    /// Returns [`Error::UnsupportedUrl`] when the input belongs to another platform.
     fn extract_share_url(&self, input: &str) -> Result<Url>;
 
     fn resolve_text(&self, input: &str) -> impl Future<Output = Result<ResolvedPost>> + Send;
@@ -58,12 +58,12 @@ impl Platform {
         }
     }
 
-    /// Short human label for CLI / logs.
+    /// Returns the label shown by the CLI and logs.
     pub fn display_name(&self) -> &'static str {
         self.platform_id().display_name()
     }
 
-    /// Optional capability note (credentials, limits).
+    /// Describes credentials or other resolver constraints.
     pub fn capability_note(&self) -> &'static str {
         match self {
             Self::Wechat(_) => "needs YUANBAO_COOKIE",

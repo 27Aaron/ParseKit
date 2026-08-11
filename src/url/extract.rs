@@ -1,6 +1,6 @@
-//! Share-text URL candidates.
+//! Extract URLs from free-form share text.
 
-/// Trailing punctuation from chat paste.
+/// Punctuation commonly appended to URLs in chat messages.
 pub const URL_TRAILING_PUNCT: &[char] = &[
     '。', '，', ',', '.', '！', '!', '？', '?', ')', '）', ']', '】', '、',
 ];
@@ -9,12 +9,12 @@ pub fn trim_url_candidate(matched: &str) -> &str {
     matched.trim_end_matches(URL_TRAILING_PUNCT)
 }
 
-/// First `https://…` token in free-form share text (punctuation-trimmed).
+/// Returns the first HTTPS URL after trimming trailing chat punctuation.
 pub fn first_https_url(input: &str) -> Option<&str> {
     let start = input.find("https://")?;
     let rest = &input[start..];
-    // Stop only on whitespace; trim trailing chat punctuation afterward so
-    // host dots (e.g. `b23.tv`) are preserved.
+    // Whitespace delimits the candidate; punctuation is trimmed separately so
+    // dots within hostnames such as `b23.tv` remain intact.
     let end = rest.find(char::is_whitespace).unwrap_or(rest.len());
     let candidate = trim_url_candidate(&rest[..end]);
     (!candidate.is_empty()).then_some(candidate)

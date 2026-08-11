@@ -1,4 +1,4 @@
-//! Env loading and kit construction.
+//! Load environment configuration and construct `ParseKit`.
 
 use std::path::PathBuf;
 

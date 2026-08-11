@@ -1,4 +1,4 @@
-//! HTTPS media download with host allowlist, redirect limits, and size caps.
+//! Secure HTTPS downloads with host, redirect, size, and disk safeguards.
 
 mod http;
 mod progress;
@@ -49,7 +49,7 @@ const DEFAULT_MEDIA_USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64
 pub(super) const DOWNLOAD_RETRY_DELAYS: [Duration; 2] =
     [Duration::from_secs(1), Duration::from_secs(2)];
 
-/// Origin / Referer / User-Agent for media requests.
+/// Request headers used to identify media downloads.
 #[derive(Clone, Debug, Default)]
 pub struct DownloadRequestIdentity {
     pub origin: Option<String>,
@@ -71,7 +71,7 @@ impl DownloadRequestIdentity {
     }
 }
 
-/// On-disk progress (20/40/60/80/100% when Content-Length is known).
+/// Cumulative progress reported at fixed thresholds when the length is known.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct DownloadProgress {
     pub downloaded_bytes: u64,
@@ -81,8 +81,10 @@ pub struct DownloadProgress {
 
 pub(super) type ProgressCallback = Arc<dyn Fn(DownloadProgress) + Send + Sync + 'static>;
 
-/// Finished download; call [`DownloadedMedia::cleanup`] when done, or
-/// [`DownloadedMedia::into_path`] / [`DownloadedMedia::keep`] to retain the file.
+/// A completed download stored on disk.
+///
+/// The file is deleted on drop unless retained with [`Self::into_path`] or
+/// [`Self::keep`]. Call [`Self::cleanup`] to remove it early.
 #[derive(Debug)]
 #[must_use = "downloaded media must be uploaded, kept, or explicitly cleaned up"]
 pub struct DownloadedMedia {
@@ -108,13 +110,13 @@ impl DownloadedMedia {
         }
     }
 
-    /// Keep the file on disk and return ownership of the path (disarms Drop cleanup).
+    /// Keeps the file and transfers ownership of its path to the caller.
     pub fn into_path(mut self) -> PathBuf {
         self.armed = false;
         std::mem::take(&mut self.path)
     }
 
-    /// Alias for [`Self::into_path`].
+    /// Keeps the file and returns its path.
     pub fn keep(self) -> PathBuf {
         self.into_path()
     }
@@ -128,7 +130,7 @@ impl Drop for DownloadedMedia {
     }
 }
 
-/// HTTPS media download with host allowlist, redirect limits, and size caps.
+/// Downloads media over HTTPS under explicit network and storage limits.
 #[derive(Clone, Debug)]
 pub struct MediaDownloader {
     workspace_dir: Arc<PathBuf>,
@@ -145,7 +147,7 @@ pub(super) struct DiskWriteBudget {
 }
 
 impl MediaDownloader {
-    /// Explicit host allowlist (empty / invalid lists rejected).
+    /// Creates a downloader with an explicit host allowlist.
     pub fn with_allowed_hosts(
         workspace_dir: impl Into<PathBuf>,
         max_bytes: u64,
@@ -233,7 +235,7 @@ impl MediaDownloader {
         self.allowed_hosts.as_ref()
     }
 
-    /// Same policy, stricter or equal byte limit.
+    /// Clones this downloader with an equal or lower byte limit.
     pub fn capped(&self, max_bytes: u64) -> Result<Self> {
         if max_bytes == 0 {
             return Err(Error::Config("媒体下载大小上限必须大于零".to_owned()));
@@ -266,8 +268,9 @@ impl MediaDownloader {
         self.download_url_with_callback(url, None, None, None).await
     }
 
-    /// Download every source to its own file (image sets / multi-item posts).
-    /// On partial failure, already-written files are cleaned up.
+    /// Downloads each source to a separate file.
+    ///
+    /// Completed files are removed if a later download fails.
     pub async fn download_all<'a, I>(&self, sources: I) -> Result<Vec<DownloadedMedia>>
     where
         I: IntoIterator<Item = &'a MediaSource>,
@@ -295,8 +298,9 @@ impl MediaDownloader {
         .await
     }
 
-    /// Try each source in order. When `decode_key` is set, XOR the first 128 KiB
-    /// while writing; wrong key fails BMFF check and the next source is tried.
+    /// Tries sources in order until one yields playable media.
+    ///
+    /// Sources with a `decode_key` are decrypted while written and validated as BMFF.
     pub async fn download_playable<'a, I>(&self, sources: I) -> Result<DownloadedMedia>
     where
         I: IntoIterator<Item = &'a MediaSource>,
@@ -344,7 +348,9 @@ impl MediaDownloader {
         .await
     }
 
-    /// Progress callback: quick, sync; thresholds 20/40/60/80/100 when length known.
+    /// Downloads one source and reports known-length progress at 20% intervals.
+    ///
+    /// The synchronous callback should return promptly.
     pub async fn download_with_progress<F>(
         &self,
         source: &MediaSource,
@@ -378,8 +384,8 @@ impl MediaDownloader {
         progress_callback: Option<ProgressCallback>,
         decode_key: Option<u64>,
     ) -> Result<DownloadedMedia> {
-        // Stable path so transient retries can resume with HTTP Range when there is
-        // no decode_key (XOR prefix streams must restart from byte 0).
+        // Reuse one path across retries so unencrypted downloads can resume.
+        // Encrypted prefixes must restart from byte zero.
         tokio::fs::create_dir_all(self.workspace_dir.as_path())
             .await
             .map_err(|_| Error::Storage(self.workspace_dir.as_ref().clone()))?;
@@ -444,7 +450,7 @@ impl MediaDownloader {
             });
         }
 
-        // At most one restart if the server ignores Range and returns 200.
+        // Allow one full restart when a server ignores `Range`.
         for _ in 0..2 {
             if resume_from > self.max_bytes {
                 return Err(Error::MediaTooLarge {
@@ -456,18 +462,18 @@ impl MediaDownloader {
             let response = self.follow_redirects(url.clone(), resume_from).await?;
             let status = response.status();
             let Some(next_resume) = effective_resume_offset(resume_from, status) else {
-                // Non-resumable error status (4xx/5xx, etc.).
+                // A status without resume semantics is handled as an error.
                 return check_response_status(status)
                     .map(|()| unreachable!("successful status should yield a resume offset"));
             };
             if resume_from > 0 && next_resume == 0 {
-                // Server ignored Range — restart from zero once.
+                // The server ignored `Range`; discard the partial file and retry once.
                 let _ = tokio::fs::remove_file(&path).await;
                 resume_from = 0;
                 continue;
             }
             resume_from = next_resume;
-            // 206 Partial Content is success when resuming; otherwise require 200.
+            // Resumed requests accept 206; fresh requests still require 200.
             if !(resume_from > 0 && status == reqwest::StatusCode::PARTIAL_CONTENT) {
                 check_response_status(status)?;
             }
@@ -590,7 +596,7 @@ impl MediaDownloader {
         let disk_write_budget = Arc::clone(&self.disk_write_budget);
         let (progress_reporter, _progress_guard) =
             ProgressReporter::new(content_length, progress_callback);
-        // Only XOR from the start of a fresh download.
+        // Decryption starts at byte zero, so resumed writes never initialize XOR state.
         let prefix_xor = if resume_from == 0 {
             decode_key.map(crate::platforms::wechat::PrefixXor::new)
         } else {

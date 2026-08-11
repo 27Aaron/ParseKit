@@ -1,4 +1,4 @@
-//! Shared URL helpers for share-text extraction and query cleanup.
+//! URL extraction and normalization utilities.
 
 mod clean;
 mod extract;

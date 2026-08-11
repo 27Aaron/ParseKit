@@ -1,4 +1,4 @@
-//! Disk write path, private temp files, and stream XOR while writing.
+//! Private file creation, resumable writes, and streaming prefix decryption.
 
 use std::{
     fs::{File, OpenOptions},
@@ -23,7 +23,7 @@ pub(super) fn random_task_path(directory: &Path, url: &url::Url) -> PathBuf {
     directory.join(format!("{}.{ext}", Uuid::new_v4().hyphenated()))
 }
 
-/// Guess a safe file extension from the media URL path (default `bin`).
+/// Infers a safe extension from the URL path, falling back to `bin`.
 pub(super) fn extension_from_url(url: &url::Url) -> &'static str {
     let path = url.path().to_ascii_lowercase();
     let ext = path.rsplit('.').next().unwrap_or("");
@@ -49,8 +49,9 @@ pub(super) fn extension_from_url(url: &url::Url) -> &'static str {
     }
 }
 
-/// Decide resume offset handling after an HTTP response status is known.
-/// Returns the effective resume offset (0 = rewrite from start).
+/// Returns the safe resume offset for a response, or `None` if it cannot resume.
+///
+/// An offset of zero means the destination must be rewritten from the start.
 pub(super) fn effective_resume_offset(requested: u64, status: reqwest::StatusCode) -> Option<u64> {
     use reqwest::StatusCode;
     if requested == 0 {
@@ -60,7 +61,7 @@ pub(super) fn effective_resume_offset(requested: u64, status: reqwest::StatusCod
         return Some(requested);
     }
     if status == StatusCode::OK {
-        // Server ignored Range — caller should restart at 0.
+        // A 200 response ignored `Range`; restart from byte zero.
         return Some(0);
     }
     None
@@ -73,12 +74,12 @@ pub(super) fn ensure_free_disk_space(directory: &Path, pending_write_bytes: u64)
     let path = CString::new(directory.as_os_str().as_bytes())
         .map_err(|_| Error::Storage(directory.to_owned()))?;
     let mut statistics = MaybeUninit::<libc::statvfs>::uninit();
-    // SAFETY: `path` is NUL-terminated and `statistics` points to writable,
-    // correctly aligned storage. A successful call initializes the structure.
+    // SAFETY: `path` is a valid NUL-terminated C string, and `statistics`
+    // points to aligned, writable memory for `statvfs` to initialize.
     if unsafe { libc::statvfs(path.as_ptr(), statistics.as_mut_ptr()) } != 0 {
         return Err(Error::Storage(directory.to_owned()));
     }
-    // SAFETY: statvfs returned success immediately above.
+    // SAFETY: `statvfs` succeeded, so `statistics` is initialized.
     let statistics = unsafe { statistics.assume_init() };
     let block_size = if statistics.f_frsize == 0 {
         statistics.f_bsize

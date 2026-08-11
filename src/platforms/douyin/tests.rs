@@ -1,4 +1,4 @@
-//! Douyin resolver unit tests.
+//! Tests for the Douyin resolver.
 
 use super::{
     parse::{

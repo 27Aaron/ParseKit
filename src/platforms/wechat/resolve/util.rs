@@ -1,4 +1,4 @@
-//! JSON / cookie / HTTP status helpers for WeChat resolve.
+//! JSON, cookie, and HTTP response helpers for WeChat resolution.
 
 use reqwest::{Response, StatusCode};
 use serde::{Deserialize, Serialize};

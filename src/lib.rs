@@ -1,6 +1,6 @@
-//! Multi-platform parse and media download library.
+//! Parse and download media from supported social platforms.
 //!
-//! Resolvers: [`platforms`]. Facade: [`ParseKit`].
+//! Use [`ParseKit`] as the facade or access individual [`platforms`] resolvers.
 
 pub mod error;
 pub mod hub;

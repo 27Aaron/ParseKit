@@ -1,11 +1,11 @@
-//! Shared host-rule matching for resolved media and the downloader allowlist.
+//! Host validation shared by resolvers and media downloads.
 
 use url::Url;
 
-/// Match an exact host rule or a dot-prefixed subdomain rule.
+/// Matches an exact hostname or a dot-prefixed subdomain rule.
 ///
-/// `.cdn.example` matches `video.cdn.example`, but deliberately does not match
-/// the bare apex `cdn.example` or lookalikes such as `evilcdn.example`.
+/// A rule such as `.cdn.example` matches `video.cdn.example`, but not the apex
+/// `cdn.example` or a lookalike such as `evilcdn.example`.
 pub(crate) fn host_matches_rules<I, S>(host: &str, rules: I) -> bool
 where
     I: IntoIterator<Item = S>,
@@ -24,9 +24,9 @@ where
     })
 }
 
-/// Validate the authority and host of a media URL before putting it in a
-/// [`crate::MediaSource`]. Network-address checks still happen immediately
-/// before download, after DNS resolution.
+/// Returns `true` when a URL has a safe HTTPS authority and a reviewed host.
+///
+/// DNS and IP checks run separately immediately before download.
 pub(crate) fn is_reviewed_https_url(url: &Url, rules: &[&str]) -> bool {
     url.scheme() == "https"
         && url.username().is_empty()

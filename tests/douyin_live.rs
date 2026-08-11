@@ -1,9 +1,10 @@
-//! Live Douyin resolve tests (ignored by default).
+//! Live Douyin resolver tests, ignored by default.
 //!
-//! Set `DOUYIN_SAMPLE_URL` to a public video share link, then:
+//! Opt in with a public video share link:
 //!
 //! ```bash
-//! DOUYIN_SAMPLE_URL='https://v.douyin.com/…' cargo test --test douyin_live -- --ignored --nocapture
+//! DOUYIN_SAMPLE_URL='https://v.douyin.com/AbCdEf' \
+//!   cargo test --test douyin_live -- --ignored --nocapture
 //! ```
 
 use std::env;

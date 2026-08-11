@@ -1,4 +1,4 @@
-//! Bilibili public video resolve (BV / av / b23 short links).
+//! Resolve public Bilibili videos from BV, av, and b23 links.
 
 mod parse;
 mod share;
@@ -43,7 +43,7 @@ const USER_AGENT_VALUE: &str = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) 
 const VIEW_API: &str = "https://api.bilibili.com/x/web-interface/view";
 const PLAYURL_API: &str = "https://api.bilibili.com/x/player/playurl";
 
-/// Download allowlist. Entries starting with `.` are suffix rules.
+/// Reviewed media hosts; a leading dot matches subdomains only.
 pub const REVIEWED_MEDIA_HOSTS: &[&str] = &[
     ".bilivideo.com",
     ".bilivideo.cn",
@@ -175,9 +175,9 @@ impl BilibiliResolver {
         value.get("data").cloned().ok_or(Error::UpstreamChanged)
     }
 
-    /// Prefer progressive media; fall back to DASH-capable modes when needed.
+    /// Requests progressive sources first, then DASH sources as a fallback.
     async fn request_play_sources(&self, bvid: &str, cid: u64) -> Result<Vec<MediaSource>> {
-        // (fnval, qn): 1 = progressive; 16/80/4048 = DASH-capable.
+        // `fnval=1` requests progressive media; 16, 80, and 4048 enable DASH variants.
         const ATTEMPTS: &[(u32, u32)] =
             &[(1, 80), (1, 64), (1, 32), (16, 80), (80, 80), (4048, 80)];
         let mut last_error = None;

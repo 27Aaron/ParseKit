@@ -1,4 +1,4 @@
-//! Douyin: short link → aweme_id → share page `_ROUTER_DATA`.
+//! Resolve Douyin videos from short links and embedded page data.
 
 mod parse;
 mod share;
@@ -42,7 +42,7 @@ const MEDIA_USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleW
 const DOUYIN_ORIGIN: &str = "https://www.douyin.com";
 const DOUYIN_REFERER: &str = "https://www.douyin.com/";
 
-/// Download allowlist. Entries starting with `.` are suffix rules.
+/// Reviewed media hosts; a leading dot matches subdomains only.
 pub const REVIEWED_MEDIA_HOSTS: &[&str] = &[
     "aweme.snssdk.com",
     "www.douyin.com",

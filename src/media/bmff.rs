@@ -1,4 +1,4 @@
-//! Generic BMFF / ISO-BMFF prefix checks (MP4, fMP4, etc.).
+//! ISO Base Media File Format (BMFF) prefix validation.
 
 use std::path::Path;
 
@@ -6,7 +6,7 @@ use tokio::{fs::OpenOptions, io::AsyncReadExt};
 
 use crate::Result;
 
-/// True if `data` begins with a recognizable BMFF box sequence.
+/// Returns `true` when `data` starts with a recognizable BMFF box sequence.
 pub fn looks_like_bmff(data: &[u8]) -> bool {
     let mut offset = 0_usize;
     for _ in 0..16 {
@@ -48,7 +48,7 @@ pub fn looks_like_bmff(data: &[u8]) -> bool {
     false
 }
 
-/// Read up to `max_bytes` from the start of `path` and check for BMFF.
+/// Reads at most `max_bytes` from `path` and checks the prefix for BMFF boxes.
 pub async fn prefix_looks_like_bmff(path: &Path, max_bytes: usize) -> Result<bool> {
     let mut file = OpenOptions::new().read(true).open(path).await?;
     let length = file.metadata().await?.len().min(max_bytes as u64) as usize;
@@ -60,7 +60,7 @@ pub async fn prefix_looks_like_bmff(path: &Path, max_bytes: usize) -> Result<boo
     Ok(looks_like_bmff(&prefix))
 }
 
-/// Convenience: check a typical media prefix (128 KiB).
+/// Checks the standard 128 KiB media prefix for BMFF boxes.
 pub async fn file_prefix_looks_like_bmff(path: &Path) -> Result<bool> {
     prefix_looks_like_bmff(path, 128 * 1024).await
 }

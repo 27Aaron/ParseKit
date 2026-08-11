@@ -1,4 +1,4 @@
-//! WeChat Channels (视频号).
+//! WeChat Channels resolver and media helpers.
 
 mod decrypt;
 mod hosts;

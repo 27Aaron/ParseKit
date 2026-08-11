@@ -1,4 +1,4 @@
-//! Unit tests for WeChat resolve modules.
+//! Tests for the WeChat resolver.
 
 use super::build::{build_post, has_matching_media_identity, merge_source_metadata};
 use super::share::{

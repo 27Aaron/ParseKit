@@ -1,4 +1,4 @@
-//! Download progress thresholds (20/40/60/80/100%).
+//! Fixed-threshold download progress reporting.
 
 use std::sync::{
     Arc,

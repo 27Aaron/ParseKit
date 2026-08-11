@@ -9,13 +9,13 @@ use crate::{
     platforms::{self, BilibiliResolver, DouyinResolver, Platform, WechatResolver},
 };
 
-/// Multi-platform facade; tries platforms in registration order.
+/// Resolves posts through registered platforms in order.
 #[derive(Debug, Clone)]
 pub struct ParseKit {
     platforms: Vec<Platform>,
 }
 
-/// Kit builder. [`ParseKit::new`] registers WeChat, Douyin, then Bilibili.
+/// Configures the platform resolver order used by [`ParseKit`].
 #[derive(Debug, Default)]
 pub struct ParseKitBuilder {
     platforms: Vec<Platform>,
@@ -60,7 +60,9 @@ impl ParseKitBuilder {
 }
 
 impl ParseKit {
-    /// WeChat + Douyin + Bilibili. Custom sets: [`ParseKit::builder`].
+    /// Builds the default WeChat, Douyin, and Bilibili resolver set.
+    ///
+    /// Use [`ParseKit::builder`] to select a custom set or order.
     pub fn new(wechat_yuanbao_cookie: impl Into<String>) -> Result<Self> {
         Self::builder()
             .wechat(wechat_yuanbao_cookie)?
@@ -132,7 +134,7 @@ impl ParseKit {
         &self.platforms
     }
 
-    /// Downloader allowlisted for `post.platform`.
+    /// Creates a downloader restricted to the resolved post's platform hosts.
     pub fn media_downloader_for(
         &self,
         post: &ResolvedPost,

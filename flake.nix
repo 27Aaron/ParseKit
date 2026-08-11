@@ -25,21 +25,21 @@
         default = pkgs.mkShell {
           packages =
             (with pkgs; [
-              # Rust toolchain and editor support (nixpkgs stable channel via flake.lock).
-              # Keep in sync with Cargo.toml rust-version / CI stable when practical.
+              # Rust toolchain and editor support from the pinned nixpkgs revision.
+              # Keep this toolchain aligned with Cargo.toml and CI.
               rustc
               cargo
               clippy
               rustfmt
               rust-analyzer
 
-              # Common Cargo development tools.
+              # Cargo tools used during development.
               cargo-audit
               cargo-edit
               cargo-nextest
               cargo-watch
 
-              # Native deps, media probe, and diagnostics.
+              # Native dependencies, media tooling, and diagnostics.
               pkg-config
               openssl
               ffmpeg-headless

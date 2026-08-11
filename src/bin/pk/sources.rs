@@ -1,4 +1,4 @@
-//! Media source selection for download.
+//! Select media sources for CLI downloads.
 
 use parse_kit::{ContentKind, Error, MediaSource, ResolvedPost, Result};
 
@@ -22,8 +22,8 @@ pub fn select_sources(
         return Err(Error::MediaUnavailable);
     }
 
-    // `--source` indexes the stable order printed by `pk resolve`; preference
-    // only affects automatic fallback order when no explicit index is given.
+    // Explicit indices always refer to `pk resolve` order. `--prefer` only
+    // reorders automatic fallbacks.
     if let Some(index) = source {
         let chosen = sources.get(index).copied().ok_or_else(|| {
             Error::Config(format!(

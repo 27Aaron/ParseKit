@@ -1,8 +1,8 @@
-//! CDN hosts and download request identity.
+//! Reviewed media hosts and download request identity.
 
 use crate::media::DownloadRequestIdentity;
 
-/// Reviewed CDN hosts for media download (exact match only).
+/// Exact-match CDN hosts reviewed for media downloads.
 pub const REVIEWED_MEDIA_HOSTS: &[&str] = &[
     "finder.video.qq.com",
     "findermp.video.qq.com",

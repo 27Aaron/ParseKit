@@ -1,8 +1,11 @@
-//! Live Bilibili resolve tests (ignored by default).
+//! Live Bilibili resolver tests, ignored by default.
 //!
-//! DOUYIN-style opt-in:
+//! Opt in with a public video URL:
+//!
+//! ```bash
 //! BILIBILI_SAMPLE_URL='https://www.bilibili.com/video/BVxxxx' \
-//!   cargo test -p parse-kit --test bilibili_live -- --ignored --nocapture
+//!   cargo test --test bilibili_live -- --ignored --nocapture
+//! ```
 
 use std::env;
 

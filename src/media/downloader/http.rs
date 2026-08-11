@@ -1,4 +1,4 @@
-//! HTTP client pin, status mapping, and transient download retries.
+//! HTTP client pinning, response validation, and transient retries.
 
 use std::{future::Future, net::SocketAddr, time::Duration};
 
@@ -44,7 +44,7 @@ where
 }
 
 pub(super) fn is_transient_download_error(error: &Error) -> bool {
-    // RateLimited is retried with the same fixed delays (no Retry-After parsing yet).
+    // Rate limits use the fixed retry schedule until `Retry-After` is supported.
     matches!(error, Error::Network(_) | Error::RateLimited)
 }
 

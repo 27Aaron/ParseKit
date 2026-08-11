@@ -1,4 +1,4 @@
-//! Build ResolvedPost from Yuanbao parse + feed JSON.
+//! Build normalized posts from Yuanbao parse and feed responses.
 
 use serde_json::Value;
 use url::Url;
@@ -86,7 +86,7 @@ pub(super) fn build_post(
                 provenance: MediaSourceKind::Derived,
                 width: candidate.width,
                 height: candidate.height,
-                // Keep size from the feed candidate for quality ranking.
+                // Retain the candidate size because source ranking uses it.
                 size_hint: candidate.size_hint,
                 decode_key: candidate.decode_key,
             };
@@ -213,7 +213,7 @@ pub(super) fn sources_are_equivalent(left: &MediaSource, right: &MediaSource) ->
     left.url == right.url && left.decode_key == right.decode_key
 }
 
-/// Prefer larger resolution / size; H264 over H265 over unknown.
+/// Ranks by resolution, size, then codec: H.264, H.265, unknown.
 pub(super) fn quality_key(source: &MediaSource) -> (u64, u64, u8) {
     let pixels =
         u64::from(source.width.unwrap_or(0)).saturating_mul(u64::from(source.height.unwrap_or(0)));
@@ -230,7 +230,7 @@ pub(super) fn sort_sources_by_quality(sources: &mut [MediaSource]) {
     sources.sort_by_key(|source| std::cmp::Reverse(quality_key(source)));
 }
 
-/// Whether it is safe to copy `source.decode_key` onto `target`.
+/// Returns whether `target` may safely inherit `source.decode_key`.
 pub(super) fn may_share_decode_key(target: &MediaSource, source: &MediaSource) -> bool {
     if target.url == source.url {
         return true;
@@ -242,7 +242,7 @@ pub(super) fn may_share_decode_key(target: &MediaSource, source: &MediaSource) -
     {
         return true;
     }
-    // Unique identity match (caller ensures uniqueness) may share a key.
+    // The caller guarantees a unique identity match, so key sharing is unambiguous.
     has_matching_media_identity(&target.url, &source.url)
 }
 
@@ -303,7 +303,7 @@ pub(super) fn merge_source_metadata(
     if target.height.is_none() {
         target.height = source.height;
     }
-    // Never overwrite an existing key with a different one.
+    // Never replace an existing decode key with a conflicting value.
     if inherit_decode_key {
         match (target.decode_key, source.decode_key) {
             (None, Some(key)) => target.decode_key = Some(key),

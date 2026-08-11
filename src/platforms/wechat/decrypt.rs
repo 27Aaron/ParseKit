@@ -9,7 +9,9 @@ use crate::{Error, Result, media::bmff::looks_like_bmff};
 
 pub(crate) const ENCRYPTED_PREFIX_BYTES: usize = 128 * 1024;
 
-/// XOR-decrypt the first 128 KiB with WeChat `decode_key`. Returns whether bytes changed.
+/// Decrypts the first 128 KiB with a WeChat `decode_key`.
+///
+/// Returns `true` when the file was encrypted and changed.
 pub async fn decrypt_file_prefix(path: &Path, decode_key: u64) -> Result<bool> {
     let mut file = OpenOptions::new().read(true).write(true).open(path).await?;
     let length = file
@@ -27,7 +29,6 @@ pub async fn decrypt_file_prefix(path: &Path, decode_key: u64) -> Result<bool> {
         return Ok(false);
     }
 
-    // Stream XOR in chunks so peak temp memory stays small for the prefix pass.
     let mut xor = PrefixXor::new(decode_key);
     for chunk in prefix.chunks_mut(8 * 1024) {
         xor.transform(chunk);
@@ -44,7 +45,7 @@ pub async fn decrypt_file_prefix(path: &Path, decode_key: u64) -> Result<bool> {
     Ok(true)
 }
 
-/// Streaming XOR for the encrypted prefix (first 128 KiB).
+/// Applies the WeChat XOR keystream to at most the encrypted 128 KiB prefix.
 pub(crate) struct PrefixXor {
     isaac: Isaac64,
     block: [u8; 8],

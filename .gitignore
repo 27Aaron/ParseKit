@@ -8,14 +8,14 @@ rustc-ice-*.txt
 .env.local
 .env.*.local
 
-# CLI download output
+# Downloaded media
 /downloads/
 
-# Local planning / notes (never publish)
+# Private project notes
 /Todo/
 
-# direnv local state
+# direnv state
 .direnv/
 
-# macOS
+# macOS metadata
 .DS_Store

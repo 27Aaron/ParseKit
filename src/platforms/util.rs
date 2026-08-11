@@ -1,10 +1,10 @@
-//! Shared helpers for platform resolvers.
+//! Common resolver utilities.
 
 use crate::{Error, PlatformId, Result, url};
 
 pub use crate::url::{URL_TRAILING_PUNCT, trim_url_candidate};
 
-/// Do not format `reqwest::Error` (may contain signed URLs).
+/// Maps a request failure without formatting it, which could expose signed URLs.
 pub fn map_network_error(error: &reqwest::Error, timeout_msg: &str, fail_msg: &str) -> Error {
     if error.is_timeout() {
         Error::Network(timeout_msg.into())
@@ -50,7 +50,7 @@ pub async fn read_body_limited(
     Ok(bytes)
 }
 
-/// Re-export for callers that only depend on platforms::util historically.
+/// Retained for compatibility with callers of `platforms::util`.
 pub use url::clean_tracking_params;
 
 #[cfg(test)]

@@ -1,4 +1,4 @@
-//! CLI entrypoint.
+//! CLI entry point.
 
 mod args;
 mod commands;

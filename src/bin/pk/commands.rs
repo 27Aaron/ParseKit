@@ -1,4 +1,4 @@
-//! Subcommand handlers.
+//! CLI subcommand implementations.
 
 use std::path::PathBuf;
 

@@ -1,29 +1,29 @@
-//! Tracking / share parameter cleanup.
+//! Remove tracking data while preserving required URL parameters.
 
 use url::Url;
 
-/// Which query keys to keep when cleaning a URL.
+/// Defines the query parameters preserved during URL cleanup.
 #[derive(Debug, Clone, Copy)]
 pub struct CleanPolicy {
-    /// Exact query names that must survive cleaning (e.g. `token`, `encfilekey`).
+    /// Query parameter names to preserve, matched case-insensitively.
     pub reserved: &'static [&'static str],
 }
 
 impl CleanPolicy {
     pub const EMPTY: Self = Self { reserved: &[] };
 
-    /// Media signed URLs: keep only keys needed to fetch the object.
+    /// Preserves parameters required by signed media URLs.
     pub const MEDIA_SIGNED: Self = Self {
         reserved: &["token", "encfilekey", "decodekey"],
     };
 
-    /// Generic share pages: drop trackers, keep structural ids if listed.
+    /// Preserves structural parameters used by share pages.
     pub const SHARE_PAGE: Self = Self {
         reserved: &["p", "t", "spm_id_from"],
     };
 }
 
-/// Drop common tracking params; keep `policy.reserved` (case-insensitive names).
+/// Removes known tracking parameters and fragments while preserving reserved keys.
 pub fn clean_tracking_params(url: &Url, policy: CleanPolicy) -> Url {
     let mut cleaned = url.clone();
     cleaned.set_fragment(None);

@@ -1,4 +1,4 @@
-//! Human and JSON output.
+//! Render human-readable and JSON output.
 
 use parse_kit::{Error, MediaSource, MediaSourceKind, ResolvedPost, Result, VideoCodec};
 

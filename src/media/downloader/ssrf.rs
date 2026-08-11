@@ -1,4 +1,4 @@
-//! Host allowlist, DNS resolve, and private-IP rejection (SSRF guard).
+//! SSRF protection through host allowlists, DNS pinning, and public-IP checks.
 
 use std::{
     collections::HashSet,
@@ -83,17 +83,17 @@ pub(super) fn is_forbidden_ipv4(ip: Ipv4Addr) -> bool {
     a == 0
         || a == 10
         || a == 127
-        || (a == 100 && (64..=127).contains(&b)) // carrier-grade NAT
-        || (a == 169 && b == 254) // link-local and metadata endpoints
+        || (a == 100 && (64..=127).contains(&b)) // Shared address space (RFC 6598).
+        || (a == 169 && b == 254) // Link-local; includes cloud metadata endpoints.
         || (a == 172 && (16..=31).contains(&b))
         || (a == 192 && b == 168)
         || (a == 192 && b == 0 && c == 0)
-        || (a == 192 && b == 0 && c == 2) // documentation
+        || (a == 192 && b == 0 && c == 2) // Documentation (TEST-NET-1).
         || (a == 192 && b == 88 && c == 99)
-        || (a == 198 && (b == 18 || b == 19)) // benchmarking
-        || (a == 198 && b == 51 && c == 100) // documentation
-        || (a == 203 && b == 0 && c == 113) // documentation
-        || a >= 224 // multicast, reserved, and broadcast
+        || (a == 198 && (b == 18 || b == 19)) // Benchmarking.
+        || (a == 198 && b == 51 && c == 100) // Documentation (TEST-NET-2).
+        || (a == 203 && b == 0 && c == 113) // Documentation (TEST-NET-3).
+        || a >= 224 // Multicast, reserved, or limited broadcast.
 }
 
 pub(super) fn is_forbidden_ipv6(ip: Ipv6Addr) -> bool {
@@ -105,13 +105,13 @@ pub(super) fn is_forbidden_ipv6(ip: Ipv6Addr) -> bool {
     ip.is_unspecified()
         || ip.is_loopback()
         || ip.is_multicast()
-        || (segments[0] & 0xfe00) == 0xfc00 // unique-local fc00::/7
-        || (segments[0] & 0xffc0) == 0xfe80 // link-local fe80::/10
-        || (segments[0] & 0xffc0) == 0xfec0 // deprecated site-local fec0::/10
-        || (segments[0] == 0x0064 && segments[1] == 0xff9b) // NAT64 transition ranges
-        || segments[0] == 0x2002 // 6to4
-        || (segments[0] == 0x2001 && segments[1] == 0) // Teredo
-        || (segments[0] == 0x2001 && segments[1] == 0x0db8) // documentation
+        || (segments[0] & 0xfe00) == 0xfc00 // Unique-local addresses.
+        || (segments[0] & 0xffc0) == 0xfe80 // Link-local addresses.
+        || (segments[0] & 0xffc0) == 0xfec0 // Deprecated site-local addresses.
+        || (segments[0] == 0x0064 && segments[1] == 0xff9b) // Well-known NAT64 prefix.
+        || segments[0] == 0x2002 // 6to4.
+        || (segments[0] == 0x2001 && segments[1] == 0) // Teredo.
+        || (segments[0] == 0x2001 && segments[1] == 0x0db8) // Documentation.
 }
 
 pub(super) fn valid_host_name(host: &str) -> bool {

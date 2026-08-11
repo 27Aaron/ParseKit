@@ -1,4 +1,4 @@
-//! Share URL extraction and media URL derivation.
+//! Extract and normalize share URLs, then derive media URLs.
 
 use regex::Regex;
 use url::Url;

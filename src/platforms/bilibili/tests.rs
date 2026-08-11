@@ -1,4 +1,4 @@
-//! Bilibili resolver unit tests.
+//! Tests for the Bilibili resolver.
 
 use super::{
     parse::{build_post_from_payloads, collect_play_sources},

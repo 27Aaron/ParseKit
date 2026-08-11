@@ -1,4 +1,4 @@
-//! Share URL extraction and aweme identifier parsing.
+//! Extract Douyin share URLs and aweme identifiers.
 
 use regex::Regex;
 use url::Url;

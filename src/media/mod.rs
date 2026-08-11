@@ -1,4 +1,4 @@
-//! Download, probe, BMFF checks, and WeChat decrypt re-export.
+//! Media download, validation, probing, and decryption utilities.
 
 pub mod bmff;
 pub mod downloader;
@@ -9,5 +9,5 @@ pub use bmff::{file_prefix_looks_like_bmff, looks_like_bmff, prefix_looks_like_b
 pub use downloader::{DownloadProgress, DownloadRequestIdentity, DownloadedMedia, MediaDownloader};
 pub use probe::{MediaProbe, probe_media};
 
-/// WeChat prefix decrypt (implementation lives under `platforms::wechat`).
+/// Decrypts the encrypted prefix used by WeChat Channels media.
 pub use crate::platforms::wechat::decrypt_file_prefix;

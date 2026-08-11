@@ -1,4 +1,4 @@
-//! MediaDownloader unit tests.
+//! Tests for `MediaDownloader`.
 
 use std::{
     collections::HashSet,
@@ -159,7 +159,7 @@ async fn retries_only_transient_download_failures() {
     .await
     .unwrap_err();
     assert!(matches!(error, Error::RateLimited));
-    // RateLimited is now retried with the same fixed delay schedule.
+    // Rate limits follow the same fixed schedule as transient network failures.
     assert_eq!(rate_limited_attempts.load(Ordering::SeqCst), 3);
 }
 

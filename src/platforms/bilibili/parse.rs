@@ -1,4 +1,4 @@
-//! Convert Bilibili API payloads into the shared media model.
+//! Map Bilibili API payloads into the shared media model.
 
 use serde_json::Value;
 use url::Url;
@@ -115,8 +115,8 @@ fn collect_durl_sources(play: &Value) -> Vec<MediaSource> {
     let Some(durl) = play.get("durl").and_then(Value::as_array) else {
         return Vec::new();
     };
-    // Multiple durl entries are consecutive segments, not interchangeable
-    // fallbacks. The current single-file model must not return a partial video.
+    // Multiple `durl` entries are sequential segments, not fallbacks. Reject
+    // them until the model can represent a multi-part video.
     if durl.len() != 1 {
         return Vec::new();
     }

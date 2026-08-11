@@ -1,4 +1,4 @@
-//! Share URL extraction and Bilibili video identifier parsing.
+//! Extract Bilibili share URLs and video identifiers.
 
 use regex::Regex;
 use url::Url;

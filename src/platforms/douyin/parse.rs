@@ -1,4 +1,4 @@
-//! Parse Douyin page JSON into the shared media model.
+//! Map embedded Douyin page data into the shared media model.
 
 use serde_json::Value;
 use url::Url;
@@ -29,7 +29,7 @@ pub(super) fn parse_any_page_data(html: &str) -> Result<Value> {
 }
 
 fn parse_script_json_assignment(html: &str, marker: &str) -> Result<Value> {
-    // Slice JSON between assignment and </script> (nested braces break regex).
+    // Slice through `</script>` because a regex cannot safely match nested JSON.
     let marker_at = html.find(marker).ok_or(Error::UpstreamChanged)?;
     let after_marker = &html[marker_at + marker.len()..];
     let eq_at = after_marker.find('=').ok_or(Error::UpstreamChanged)?;
@@ -46,7 +46,7 @@ fn parse_script_json_assignment(html: &str, marker: &str) -> Result<Value> {
 }
 
 pub(super) fn build_post_from_router(aweme_id: &str, router: &Value) -> Result<ResolvedPost> {
-    // Key is `video_(id)/page`; `/` → `~1` in JSON Pointer.
+    // JSON Pointer escapes the slash in `video_(id)/page` as `~1`.
     let page = router
         .pointer("/loaderData/video_(id)~1page")
         .ok_or(Error::UpstreamChanged)?;
@@ -156,7 +156,7 @@ fn collect_image_sources(item: &Value) -> Option<Vec<MediaSource>> {
     (!sources.is_empty()).then_some(sources)
 }
 
-/// Ranked video qualities: highest first (primary + fallbacks).
+/// Collects video sources in descending quality order.
 fn collect_video_sources(video: &Value) -> Result<Vec<MediaSource>> {
     let mut ranked = Vec::new();
 

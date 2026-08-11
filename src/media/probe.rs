@@ -38,7 +38,7 @@ pub struct MediaProbe {
     pub duration_seconds: Option<f64>,
 }
 
-/// Probe a local file with ffprobe (file protocol only).
+/// Probes a local media file with `ffprobe`, restricted to the file protocol.
 pub async fn probe_media(path: impl AsRef<Path>) -> Result<MediaProbe> {
     let path = path.as_ref();
     let metadata = tokio::fs::metadata(path)
@@ -66,7 +66,7 @@ pub async fn probe_media(path: impl AsRef<Path>) -> Result<MediaProbe> {
         )
         .arg("-of")
         .arg("json")
-        // No network: untrusted files must not trigger HLS/DASH fetches.
+        // Restrict protocols so an untrusted file cannot trigger remote fetches.
         .arg("-protocol_whitelist")
         .arg("file")
         .arg("-format_whitelist")
@@ -129,9 +129,8 @@ pub async fn probe_media(path: impl AsRef<Path>) -> Result<MediaProbe> {
 
 #[cfg(unix)]
 fn apply_ffprobe_resource_limits(command: &mut Command) {
-    // SAFETY: the hook performs only async-signal-safe setrlimit syscalls and
-    // constructs an errno-backed I/O error on failure. It runs in the child
-    // immediately before exec, so it cannot affect the parent process.
+    // SAFETY: The pre-exec hook calls only `getrlimit`/`setrlimit` and creates
+    // errors from `errno`. It runs in the child and cannot mutate parent state.
     unsafe {
         command.pre_exec(|| {
             #[cfg(target_os = "linux")]
@@ -229,7 +228,7 @@ fn is_executable_file(metadata: &fs::Metadata) -> bool {
 
 #[cfg(unix)]
 fn executable_path_is_trusted(path: &Path, metadata: &fs::Metadata) -> bool {
-    // SAFETY: geteuid takes no pointers and has no preconditions.
+    // SAFETY: `geteuid` has no arguments and cannot dereference memory.
     let effective_user_id = unsafe { libc::geteuid() };
     let trusted_owner = |owner| owner == 0 || owner == effective_user_id;
     if !trusted_owner(metadata.uid()) || metadata.permissions().mode() & 0o022 != 0 {
@@ -449,7 +448,7 @@ fn parse_display_matrix_rotation(value: &Value) -> Option<bool> {
         return None;
     }
 
-    // Skip non-orthogonal matrices (scale/mirror, not pure rotation).
+    // Reject shear because rotation classification assumes orthogonal axes.
     let dot = a.mul_add(b, c * d).abs();
     if dot > first_norm * second_norm * 0.01 {
         return None;
