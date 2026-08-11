@@ -62,6 +62,15 @@ impl std::fmt::Debug for WechatResolver {
     }
 }
 
+/// Local (non-network) view of whether a Yuanbao cookie looks usable.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WechatCredentialStatus {
+    /// Missing obvious session keys.
+    Incomplete,
+    /// Has hy_user / common session markers (not a guarantee of validity).
+    Present,
+}
+
 impl WechatResolver {
     pub fn new(cookie: impl Into<String>) -> Result<Self> {
         Self::with_endpoints(
@@ -69,6 +78,20 @@ impl WechatResolver {
             Url::parse(PARSE_ENDPOINT).expect("constant parse endpoint must be valid"),
             Url::parse(FEED_ENDPOINT).expect("constant feed endpoint must be valid"),
         )
+    }
+
+    /// Inspect cookie shape without calling upstream (never logs cookie values).
+    pub fn credential_status(&self) -> WechatCredentialStatus {
+        let has_user = cookie_value(&self.cookie, "hy_user").is_some();
+        let has_session = cookie_value(&self.cookie, "token").is_some()
+            || cookie_value(&self.cookie, "hy_token").is_some()
+            || cookie_value(&self.cookie, "yuanbao_token").is_some()
+            || self.cookie.contains("hy_user=");
+        if has_user || has_session {
+            WechatCredentialStatus::Present
+        } else {
+            WechatCredentialStatus::Incomplete
+        }
     }
 
     fn with_endpoints(

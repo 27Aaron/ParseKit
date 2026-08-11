@@ -36,9 +36,11 @@ pub const REVIEWED_MEDIA_HOSTS: &[&str] = &[
     ".bilivideo.com",
     ".bilivideo.cn",
     ".akamaized.net",
+    ".hdslb.com",
     "upos-sz-mirrorcos.bilivideo.com",
     "upos-sz-mirrorhw.bilivideo.com",
     "upos-sz-mirrorali.bilivideo.com",
+    "upos-sz-estgcos.bilivideo.com",
     "upos-hz-mirrorakam.akamaized.net",
 ];
 
@@ -166,15 +168,60 @@ impl BilibiliResolver {
         value.get("data").cloned().ok_or(Error::UpstreamChanged)
     }
 
-    async fn request_playurl(&self, bvid: &str, cid: u64) -> Result<Value> {
+    /// Try several playurl modes: progressive durl first, then dash video URLs.
+    async fn request_play_sources(&self, bvid: &str, cid: u64) -> Result<Vec<MediaSource>> {
+        // (fnval, qn): 1 = progressive; 16/80 = dash-capable.
+        const ATTEMPTS: &[(u32, u32)] =
+            &[(1, 80), (1, 64), (1, 32), (16, 80), (80, 80), (4048, 80)];
+        let mut last_error = None;
+        let mut collected = Vec::new();
+        for &(fnval, qn) in ATTEMPTS {
+            match self.request_playurl_raw(bvid, cid, fnval, qn).await {
+                Ok(play) => {
+                    let mut sources = collect_play_sources(&play);
+                    if !sources.is_empty() {
+                        // Prefer higher quality first: keep order from collectors.
+                        for source in sources.drain(..) {
+                            if collected
+                                .iter()
+                                .any(|existing: &MediaSource| existing.url == source.url)
+                            {
+                                continue;
+                            }
+                            collected.push(source);
+                        }
+                        // Progressive durl is enough; dash attempts can still add fallbacks.
+                        if fnval == 1 && !collected.is_empty() {
+                            return Ok(collected);
+                        }
+                    }
+                }
+                Err(error) => last_error = Some(error),
+            }
+        }
+        if collected.is_empty() {
+            Err(last_error.unwrap_or(Error::MediaUnavailable))
+        } else {
+            Ok(collected)
+        }
+    }
+
+    async fn request_playurl_raw(
+        &self,
+        bvid: &str,
+        cid: u64,
+        fnval: u32,
+        qn: u32,
+    ) -> Result<Value> {
         let mut endpoint = Url::parse(PLAYURL_API).expect("constant");
         endpoint
             .query_pairs_mut()
             .append_pair("bvid", bvid)
             .append_pair("cid", &cid.to_string())
-            .append_pair("qn", "80")
-            .append_pair("fnval", "1")
-            .append_pair("fourk", "1");
+            .append_pair("qn", &qn.to_string())
+            .append_pair("fnval", &fnval.to_string())
+            .append_pair("fourk", "1")
+            .append_pair("fnver", "0");
         let response = self
             .client
             .get(endpoint)
@@ -331,13 +378,10 @@ async fn build_post_from_view(
         .or_else(|| view.pointer("/pages/0/cid").and_then(Value::as_u64))
         .ok_or(Error::UpstreamChanged)?;
 
-    let play = resolver.request_playurl(&bvid, cid).await?;
-    let sources = collect_durl_sources(&play)?;
+    let mut sources = resolver.request_play_sources(&bvid, cid).await?;
     if sources.is_empty() {
         return Err(Error::MediaUnavailable);
     }
-    let mut sources = sources;
-    // Higher quality first (qn descending already from API order often).
     let primary = sources.remove(0);
     let fallbacks = sources;
 
@@ -356,24 +400,106 @@ async fn build_post_from_view(
     ))
 }
 
-fn collect_durl_sources(play: &Value) -> Result<Vec<MediaSource>> {
+fn collect_play_sources(play: &Value) -> Vec<MediaSource> {
+    let mut sources = collect_durl_sources(play);
+    sources.extend(collect_dash_video_sources(play));
+    sources
+}
+
+fn collect_durl_sources(play: &Value) -> Vec<MediaSource> {
     let mut sources = Vec::new();
     if let Some(durl) = play.get("durl").and_then(Value::as_array) {
         for item in durl {
-            if let Some(source) = durl_item_to_source(item) {
+            if let Some(source) = media_url_item_to_source(item, "url", MediaSourceKind::Direct) {
                 sources.push(source);
+            }
+            // backup_url may hold alternate CDNs
+            if let Some(backups) = item.get("backup_url").and_then(Value::as_array) {
+                for backup in backups {
+                    if let Some(raw) = backup.as_str()
+                        && let Some(source) =
+                            https_media_source(raw, None, MediaSourceKind::Derived)
+                    {
+                        sources.push(source);
+                    }
+                }
             }
         }
     }
-    // Some responses nest under data.durl already unwrapped.
-    Ok(sources)
+    sources
 }
 
-fn durl_item_to_source(item: &Value) -> Option<MediaSource> {
+fn collect_dash_video_sources(play: &Value) -> Vec<MediaSource> {
+    let mut ranked: Vec<(u64, MediaSource)> = Vec::new();
+    let Some(videos) = play
+        .pointer("/dash/video")
+        .and_then(Value::as_array)
+        .cloned()
+        .or_else(|| {
+            play.get("dash")
+                .and_then(|d| d.get("video"))
+                .and_then(Value::as_array)
+                .cloned()
+        })
+    else {
+        return Vec::new();
+    };
+
+    for item in &videos {
+        let bandwidth = item.get("bandwidth").and_then(Value::as_u64).unwrap_or(0);
+        let width = item.get("width").and_then(Value::as_u64).map(|v| v as u32);
+        let height = item.get("height").and_then(Value::as_u64).map(|v| v as u32);
+        let size_hint = item.get("size").and_then(Value::as_u64);
+        for key in ["base_url", "baseUrl", "url"] {
+            if let Some(raw) = item.get(key).and_then(Value::as_str)
+                && let Some(mut source) =
+                    https_media_source(raw, size_hint, MediaSourceKind::Derived)
+            {
+                source.width = width;
+                source.height = height;
+                ranked.push((bandwidth, source));
+                break;
+            }
+        }
+        if let Some(backups) = item
+            .get("backup_url")
+            .or_else(|| item.get("backupUrl"))
+            .and_then(Value::as_array)
+        {
+            for backup in backups {
+                if let Some(raw) = backup.as_str()
+                    && let Some(mut source) =
+                        https_media_source(raw, size_hint, MediaSourceKind::Derived)
+                {
+                    source.width = width;
+                    source.height = height;
+                    ranked.push((bandwidth.saturating_sub(1), source));
+                }
+            }
+        }
+    }
+    ranked.sort_by_key(|(bw, _)| std::cmp::Reverse(*bw));
+    ranked.into_iter().map(|(_, s)| s).collect()
+}
+
+fn media_url_item_to_source(
+    item: &Value,
+    url_key: &str,
+    kind: MediaSourceKind,
+) -> Option<MediaSource> {
     let raw = item
-        .get("url")
+        .get(url_key)
         .and_then(Value::as_str)
         .filter(|v| !v.is_empty())?;
+    let size_hint = item.get("size").and_then(Value::as_u64);
+    https_media_source(raw, size_hint, kind)
+}
+
+fn https_media_source(
+    raw: &str,
+    size_hint: Option<u64>,
+    kind: MediaSourceKind,
+) -> Option<MediaSource> {
     let url = Url::parse(raw).ok()?;
     if url.scheme() != "https" {
         return None;
@@ -382,11 +508,10 @@ fn durl_item_to_source(item: &Value) -> Option<MediaSource> {
     if !host_allowed(host) {
         return None;
     }
-    let size_hint = item.get("size").and_then(Value::as_u64);
     Some(MediaSource {
         url,
         codec: VideoCodec::Unknown,
-        provenance: MediaSourceKind::Direct,
+        provenance: kind,
         width: None,
         height: None,
         size_hint,
@@ -426,7 +551,7 @@ pub fn build_post_from_fixtures(view: &Value, play: &Value) -> Result<ResolvedPo
         .get("pic")
         .and_then(Value::as_str)
         .and_then(|raw| Url::parse(raw).ok());
-    let mut sources = collect_durl_sources(play)?;
+    let mut sources = collect_play_sources(play);
     if sources.is_empty() {
         return Err(Error::MediaUnavailable);
     }
@@ -495,5 +620,32 @@ mod tests {
                 .contains("bilivideo.com")
         );
         assert_eq!(post.primary_video().unwrap().size_hint, Some(12345));
+    }
+
+    #[test]
+    fn collects_dash_video_by_bandwidth() {
+        let play = serde_json::json!({
+            "dash": {
+                "video": [
+                    {
+                        "bandwidth": 500_000,
+                        "width": 640,
+                        "height": 360,
+                        "base_url": "https://upos-sz-mirrorcos.bilivideo.com/low.m4s"
+                    },
+                    {
+                        "bandwidth": 2_000_000,
+                        "width": 1920,
+                        "height": 1080,
+                        "baseUrl": "https://upos-sz-mirrorhw.bilivideo.com/high.m4s",
+                        "backup_url": ["https://upos-sz-mirrorali.bilivideo.com/high-b.m4s"]
+                    }
+                ]
+            }
+        });
+        let sources = collect_play_sources(&play);
+        assert!(sources.len() >= 2);
+        assert!(sources[0].url.as_str().contains("high"));
+        assert_eq!(sources[0].width, Some(1920));
     }
 }

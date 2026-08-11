@@ -44,8 +44,8 @@ where
 }
 
 pub(super) fn is_transient_download_error(error: &Error) -> bool {
-    // RateLimited is not retried here (no Retry-After).
-    matches!(error, Error::Network(_))
+    // RateLimited is retried with the same fixed delays (no Retry-After parsing yet).
+    matches!(error, Error::Network(_) | Error::RateLimited)
 }
 
 pub(super) fn pinned_http_client(

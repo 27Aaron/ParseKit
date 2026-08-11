@@ -18,8 +18,52 @@ use super::{DiskWriteBudget, DownloadedMedia};
 pub(super) const MIN_FREE_DISK_BYTES: u64 = 512 * 1024 * 1024;
 const DISK_CHECK_INTERVAL_BYTES: u64 = 16 * 1024 * 1024;
 
-pub(super) fn random_task_path(directory: &Path) -> PathBuf {
-    directory.join(format!("{}.mp4", Uuid::new_v4().hyphenated()))
+pub(super) fn random_task_path(directory: &Path, url: &url::Url) -> PathBuf {
+    let ext = extension_from_url(url);
+    directory.join(format!("{}.{ext}", Uuid::new_v4().hyphenated()))
+}
+
+/// Guess a safe file extension from the media URL path (default `bin`).
+pub(super) fn extension_from_url(url: &url::Url) -> &'static str {
+    let path = url.path().to_ascii_lowercase();
+    let ext = path.rsplit('.').next().unwrap_or("");
+    match ext {
+        "mp4" | "m4v" | "mov" => "mp4",
+        "m4s" | "mpd" => "m4s",
+        "flv" => "flv",
+        "webm" => "webm",
+        "jpg" | "jpeg" => "jpg",
+        "png" => "png",
+        "webp" => "webp",
+        "gif" => "gif",
+        "ts" => "ts",
+        _ => {
+            if path.contains("play") || path.contains("video") {
+                "mp4"
+            } else if path.contains("image") || path.contains("cover") {
+                "jpg"
+            } else {
+                "bin"
+            }
+        }
+    }
+}
+
+/// Decide resume offset handling after an HTTP response status is known.
+/// Returns the effective resume offset (0 = rewrite from start).
+pub(super) fn effective_resume_offset(requested: u64, status: reqwest::StatusCode) -> Option<u64> {
+    use reqwest::StatusCode;
+    if requested == 0 {
+        return Some(0);
+    }
+    if status == StatusCode::PARTIAL_CONTENT {
+        return Some(requested);
+    }
+    if status == StatusCode::OK {
+        // Server ignored Range — caller should restart at 0.
+        return Some(0);
+    }
+    None
 }
 
 #[cfg(unix)]
@@ -193,10 +237,7 @@ impl PendingFile {
         file.flush()?;
         drop(self.file.take());
         self.armed = false;
-        Ok(DownloadedMedia {
-            path: self.path.clone(),
-            bytes,
-        })
+        Ok(DownloadedMedia::new(self.path.clone(), bytes))
     }
 }
 

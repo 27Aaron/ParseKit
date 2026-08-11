@@ -11,6 +11,10 @@ use clap::{Parser, Subcommand, ValueEnum};
     about = "ParseKit CLI — resolve and download social media posts"
 )]
 pub struct Cli {
+    /// Enable tracing logs on stderr (RUST_LOG still respected if set).
+    #[arg(long, short = 'v', global = true)]
+    pub verbose: bool,
+
     #[command(subcommand)]
     pub command: Commands,
 }
@@ -33,7 +37,7 @@ pub enum Commands {
         #[arg(long)]
         json: bool,
     },
-    /// Resolve and download a video source.
+    /// Resolve and download media (video playable or all images for image sets).
     Download {
         /// Share text or URL.
         input: String,
@@ -49,10 +53,19 @@ pub enum Commands {
         /// Download only this source index from `pk resolve` (0-based).
         #[arg(long)]
         source: Option<usize>,
+        /// For image sets, download only the first image (default: all).
+        #[arg(long)]
+        first_only: bool,
         /// Print machine-readable JSON.
         #[arg(long)]
         json: bool,
     },
     /// List registered platforms for this build.
-    Platforms,
+    Platforms {
+        /// Also print credential / health notes.
+        #[arg(long)]
+        check: bool,
+    },
+    /// Local health check (cookie shape, registered platforms).
+    Doctor,
 }

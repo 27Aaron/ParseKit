@@ -116,8 +116,23 @@ impl DouyinResolver {
         let expanded = self.expand_short_link(url).await?;
         let aweme_id = extract_aweme_id(expanded.as_str()).ok_or(Error::UnsupportedUrl)?;
         let html = self.fetch_share_html(&aweme_id).await?;
-        let router = parse_router_data(&html)?;
-        build_post_from_router(&aweme_id, &router)
+        match parse_router_data(&html).and_then(|router| build_post_from_router(&aweme_id, &router))
+        {
+            Ok(post) => Ok(post),
+            Err(primary_error) => {
+                tracing::debug!(
+                    event = "douyin_primary_parse_failed",
+                    error = %primary_error,
+                    "iesdouyin share parse failed; trying www.douyin.com fallback"
+                );
+                let fallback_html = match self.fetch_www_video_html(&aweme_id).await {
+                    Ok(html) => html,
+                    Err(_) => return Err(primary_error),
+                };
+                let router = parse_any_page_data(&fallback_html).map_err(|_| primary_error)?;
+                build_post_from_router(&aweme_id, &router)
+            }
+        }
     }
 
     async fn expand_short_link(&self, url: &Url) -> Result<Url> {
@@ -165,10 +180,19 @@ impl DouyinResolver {
     async fn fetch_share_html(&self, aweme_id: &str) -> Result<String> {
         let share_url = Url::parse(&format!("https://www.iesdouyin.com/share/video/{aweme_id}"))
             .expect("constant share URL template is valid");
+        self.fetch_html(share_url).await
+    }
 
+    async fn fetch_www_video_html(&self, aweme_id: &str) -> Result<String> {
+        let page = Url::parse(&format!("https://www.douyin.com/video/{aweme_id}"))
+            .expect("constant video URL template is valid");
+        self.fetch_html(page).await
+    }
+
+    async fn fetch_html(&self, url: Url) -> Result<String> {
         let response = self
             .client
-            .get(share_url)
+            .get(url)
             .header(USER_AGENT, MOBILE_UA)
             .header(ACCEPT, "text/html,application/xhtml+xml")
             .header(ACCEPT_LANGUAGE, "zh-CN,zh;q=0.9,en;q=0.8")
@@ -184,10 +208,7 @@ impl DouyinResolver {
             return Err(Error::NotFound);
         }
         if !status.is_success() {
-            return Err(Error::Network(format!(
-                "抖音分享页 HTTP {}",
-                status.as_u16()
-            )));
+            return Err(Error::Network(format!("抖音页面 HTTP {}", status.as_u16())));
         }
 
         let bytes = read_body_limited(response, MAX_HTML_BYTES, map_douyin_network_error).await?;
@@ -299,10 +320,26 @@ fn extract_aweme_id(input: &str) -> Option<String> {
 }
 
 fn parse_router_data(html: &str) -> Result<Value> {
+    parse_script_json_assignment(html, "window._ROUTER_DATA")
+}
+
+fn parse_any_page_data(html: &str) -> Result<Value> {
+    for marker in [
+        "window._ROUTER_DATA",
+        "window.__RENDER_DATA__",
+        "window.RENDER_DATA",
+    ] {
+        if let Ok(value) = parse_script_json_assignment(html, marker) {
+            return Ok(value);
+        }
+    }
+    Err(Error::UpstreamChanged)
+}
+
+fn parse_script_json_assignment(html: &str, marker: &str) -> Result<Value> {
     // Slice JSON between assignment and </script> (nested braces break regex).
-    const MARKER: &str = "window._ROUTER_DATA";
-    let marker_at = html.find(MARKER).ok_or(Error::UpstreamChanged)?;
-    let after_marker = &html[marker_at + MARKER.len()..];
+    let marker_at = html.find(marker).ok_or(Error::UpstreamChanged)?;
+    let after_marker = &html[marker_at + marker.len()..];
     let eq_at = after_marker.find('=').ok_or(Error::UpstreamChanged)?;
     let after_eq = after_marker[eq_at + 1..].trim_start();
     let script_end = after_eq.find("</script>").ok_or(Error::UpstreamChanged)?;
@@ -784,6 +821,17 @@ mod tests {
 <script>window._ROUTER_DATA = {"loaderData":{"video_(id)/page":{"videoInfoRes":{"item_list":[],"filter_list":[],"status_code":0}}}};</script>
 </body></html>"#;
         let value = parse_router_data(html).unwrap();
+        assert!(
+            value
+                .pointer("/loaderData/video_(id)~1page/videoInfoRes")
+                .is_some()
+        );
+    }
+
+    #[test]
+    fn parse_any_page_data_accepts_render_data_marker() {
+        let html = r#"<!doctype html><script>window.__RENDER_DATA__ = {"loaderData":{"video_(id)/page":{"videoInfoRes":{"item_list":[],"filter_list":[],"status_code":0}}}};</script>"#;
+        let value = parse_any_page_data(html).unwrap();
         assert!(
             value
                 .pointer("/loaderData/video_(id)~1page/videoInfoRes")
