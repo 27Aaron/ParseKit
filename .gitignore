@@ -11,5 +11,8 @@ rustc-ice-*.txt
 # Local planning / notes (never publish)
 /Todo/
 
+# direnv local state
+.direnv/
+
 # macOS
 .DS_Store
