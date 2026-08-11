@@ -83,8 +83,10 @@ let media = downloader.download_playable(sources).await?;
 ```bash
 nix develop # 或 direnv allow（见 .envrc）
 cargo test --locked --all-targets
+cargo test --locked --no-default-features --lib
 cargo fmt --all -- --check
-cargo clippy --locked --all-targets -- -D warnings
+cargo clippy --locked --all-targets --all-features -- -D warnings
+RUSTDOCFLAGS="-D warnings" cargo doc --locked --no-default-features --no-deps
 ```
 
 媒体探测需要 `ffprobe`（`nix develop` 已带）。
