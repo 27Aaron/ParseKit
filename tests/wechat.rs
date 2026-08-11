@@ -8,7 +8,6 @@ use parse_kit::{
 use uuid::Uuid;
 
 const SAMPLE_SHARE_URL: &str = "https://weixin.qq.com/sph/A27pGwf5f9";
-const LIVE_DOWNLOAD_LIMIT_BYTES: u64 = 512 * 1024 * 1024;
 const LIVE_DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(20 * 60);
 
 #[tokio::test]
@@ -49,7 +48,6 @@ async fn downloads_decrypts_and_probes_wechat_channels_sample() {
     let directory = TestDirectory::new();
     let downloader = MediaDownloader::with_options(
         directory.path(),
-        Some(LIVE_DOWNLOAD_LIMIT_BYTES),
         REVIEWED_WECHAT_MEDIA_HOSTS.iter().copied(),
         LIVE_DOWNLOAD_TIMEOUT,
         DownloadRequestIdentity::wechat_channels(),

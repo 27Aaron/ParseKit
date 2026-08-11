@@ -135,16 +135,12 @@ impl ParseKit {
     }
 
     /// Creates a downloader restricted to the resolved post's platform hosts.
-    ///
-    /// `max_bytes`: optional size budget (`None` = unlimited). Bots/hosts that need a
-    /// cap should pass `Some(limit)` or call [`MediaDownloader::capped`].
     pub fn media_downloader_for(
         &self,
         post: &ResolvedPost,
         workspace_dir: impl Into<PathBuf>,
-        max_bytes: Option<u64>,
     ) -> Result<MediaDownloader> {
-        MediaDownloader::for_platform(post.platform, workspace_dir, max_bytes)
+        MediaDownloader::for_platform(post.platform, workspace_dir)
     }
 }
 
@@ -209,7 +205,7 @@ mod tests {
             Vec::new(),
         );
         let downloader = kit
-            .media_downloader_for(&post, "/tmp/parse-kit-test", Some(1024))
+            .media_downloader_for(&post, "/tmp/parse-kit-test")
             .unwrap();
         assert!(
             downloader
