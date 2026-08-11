@@ -4,13 +4,14 @@ use std::time::Duration;
 
 use reqwest::{
     Client, StatusCode,
-    header::{ACCEPT, ACCEPT_LANGUAGE, LOCATION, REFERER, USER_AGENT},
+    header::{ACCEPT, ACCEPT_LANGUAGE, COOKIE, LOCATION, REFERER, USER_AGENT},
 };
 use serde_json::Value;
 use url::Url;
 
 use crate::{
     Error, Result,
+    auth::{CookieCredential, CredentialStatus, cookie_value},
     model::{MediaSource, ResolvedPost},
     platforms::{
         PlatformResolver, PlatformSpec,
@@ -35,10 +36,18 @@ const MAX_SHORTLINK_REDIRECTS: usize = 8;
 const VIEW_API: &str = "https://api.bilibili.com/x/web-interface/view";
 const PLAYURL_API: &str = "https://api.bilibili.com/x/player/playurl";
 
+/// Progressive then DASH for anonymous traffic (progressive often tops out at 720P).
+const ANON_PLAY_ATTEMPTS: &[(u32, u32)] =
+    &[(1, 80), (1, 64), (1, 32), (16, 80), (80, 80), (4048, 80)];
+/// Logged-in ladder: one rich DASH probe, then progressive as a muxed-MP4 option.
+/// Progressive rarely exceeds 720P even with SESSDATA; DASH unlocks 1080P+.
+const AUTH_PLAY_ATTEMPTS: &[(u32, u32)] = &[(4048, 127), (80, 112), (1, 80)];
+
 #[derive(Clone)]
 pub struct BilibiliResolver {
     client: Client,
     timeout: Duration,
+    cookie: Option<CookieCredential>,
 }
 
 impl std::fmt::Debug for BilibiliResolver {
@@ -46,15 +55,54 @@ impl std::fmt::Debug for BilibiliResolver {
         formatter
             .debug_struct("BilibiliResolver")
             .field("timeout", &self.timeout)
+            .field("cookie", &self.cookie.as_ref().map(|_| "<redacted>"))
             .finish_non_exhaustive()
     }
 }
 
 impl BilibiliResolver {
+    /// Anonymous resolver (no cookie); public videos still work, often limited quality.
     pub fn new() -> Result<Self> {
+        Self::with_cookie_opt(None)
+    }
+
+    /// Resolver with an optional Cookie header (typically `BILIBILI_COOKIE` / SESSDATA).
+    pub fn with_cookie(cookie: impl Into<String>) -> Result<Self> {
+        let cookie = cookie.into();
+        let cred = CookieCredential::new(cookie)
+            .ok_or_else(|| Error::Config("BILIBILI_COOKIE 不能为空".into()))?;
+        Self::with_cookie_opt(Some(cred))
+    }
+
+    fn with_cookie_opt(cookie: Option<CookieCredential>) -> Result<Self> {
         let timeout = RESOLVE_TIMEOUT;
         let client = resolver_http_client(timeout, "无法初始化哔哩哔哩 HTTP 客户端")?;
-        Ok(Self { client, timeout })
+        Ok(Self {
+            client,
+            timeout,
+            cookie,
+        })
+    }
+
+    /// Local cookie shape check (no network).
+    pub fn credential_status(&self) -> CredentialStatus {
+        match &self.cookie {
+            None => CredentialStatus::Absent,
+            Some(cookie) => {
+                let raw = cookie.as_str();
+                let has_sess = cookie_value(raw, "SESSDATA").is_some() || raw.contains("SESSDATA=");
+                if has_sess {
+                    CredentialStatus::Present
+                } else {
+                    CredentialStatus::Incomplete
+                }
+            }
+        }
+    }
+
+    /// Whether a session cookie is attached to API requests.
+    pub fn is_authenticated(&self) -> bool {
+        matches!(self.credential_status(), CredentialStatus::Present)
     }
 
     pub async fn resolve_text(&self, input: &str) -> Result<ResolvedPost> {
@@ -141,20 +189,34 @@ impl BilibiliResolver {
         value.get("data").cloned().ok_or(Error::UpstreamChanged)
     }
 
-    /// Requests progressive sources first, then DASH sources as a fallback.
+    /// Requests playurl ladders and merges progressive + DASH sources.
+    ///
+    /// Progressive (`fnval=1`) is a single muxed MP4 and is convenient, but even with
+    /// login it often caps at 720P. Higher tiers (1080P+) almost always require DASH
+    /// (`fnval` 16/80/4048). When authenticated we therefore keep collecting after the
+    /// first progressive hit instead of returning early.
     pub(super) async fn request_play_sources(
         &self,
         bvid: &str,
         cid: u64,
     ) -> Result<Vec<MediaSource>> {
-        // `fnval=1` requests progressive media; 16, 80, and 4048 enable DASH variants.
-        const ATTEMPTS: &[(u32, u32)] =
-            &[(1, 80), (1, 64), (1, 32), (16, 80), (80, 80), (4048, 80)];
+        let authenticated = self.is_authenticated();
+        let attempts = if authenticated {
+            AUTH_PLAY_ATTEMPTS
+        } else {
+            ANON_PLAY_ATTEMPTS
+        };
         let mut last_error = None;
         let mut collected = Vec::new();
-        for &(fnval, qn) in ATTEMPTS {
+        let mut got_dash = false;
+        for &(fnval, qn) in attempts {
+            // After a successful DASH payload, only still need progressive (fnval=1).
+            if authenticated && got_dash && fnval != 1 {
+                continue;
+            }
             match self.request_playurl_raw(bvid, cid, fnval, qn).await {
                 Ok(play) => {
+                    let before = collected.len();
                     for source in collect_play_sources(&play) {
                         if !collected
                             .iter()
@@ -163,7 +225,12 @@ impl BilibiliResolver {
                             collected.push(source);
                         }
                     }
-                    if fnval == 1 && !collected.is_empty() {
+                    let added = collected.len() > before;
+                    if fnval != 1 && added {
+                        got_dash = true;
+                    }
+                    // Anonymous: progressive alone is enough for a quick download.
+                    if !authenticated && fnval == 1 && !collected.is_empty() {
                         return Ok(collected);
                     }
                 }
@@ -173,7 +240,7 @@ impl BilibiliResolver {
         if collected.is_empty() {
             Err(last_error.unwrap_or(Error::MediaUnavailable))
         } else {
-            Ok(collected)
+            Ok(dedupe_and_rank_play_sources(collected))
         }
     }
 
@@ -202,13 +269,17 @@ impl BilibiliResolver {
     }
 
     async fn request_api(&self, endpoint: Url) -> Result<Value> {
-        let response = self
+        let mut request = self
             .client
             .get(endpoint)
             .header(ACCEPT, "application/json")
             .header(ACCEPT_LANGUAGE, "zh-CN,zh;q=0.9")
             .header(USER_AGENT, USER_AGENT_VALUE)
-            .header(REFERER, "https://www.bilibili.com/")
+            .header(REFERER, "https://www.bilibili.com/");
+        if let Some(cookie) = &self.cookie {
+            request = request.header(COOKIE, cookie.as_str());
+        }
+        let response = request
             .send()
             .await
             .map_err(|error| map_network_error(&error, "上游请求超时", "无法连接上游服务"))?;
@@ -239,4 +310,40 @@ fn map_status(status: StatusCode) -> Result<()> {
         StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN => Err(Error::LoginRequired),
         _ => Err(Error::Network(format!("上游返回 HTTP {}", status.as_u16()))),
     }
+}
+
+/// Keep one stream per quality key (label + dimensions), highest bitrate first.
+fn dedupe_and_rank_play_sources(sources: Vec<MediaSource>) -> Vec<MediaSource> {
+    let mut ranked = sources;
+    ranked.sort_by(|a, b| {
+        let area = |s: &MediaSource| {
+            s.width
+                .and_then(|w| s.height.map(|h| u64::from(w) * u64::from(h)))
+                .unwrap_or(0)
+        };
+        area(b)
+            .cmp(&area(a))
+            .then_with(|| b.bitrate_bps.unwrap_or(0).cmp(&a.bitrate_bps.unwrap_or(0)))
+            .then_with(|| b.size_hint.unwrap_or(0).cmp(&a.size_hint.unwrap_or(0)))
+    });
+
+    let mut unique = Vec::with_capacity(ranked.len());
+    for source in ranked {
+        let key = (
+            source.label.clone().unwrap_or_default(),
+            source.width.unwrap_or(0),
+            source.height.unwrap_or(0),
+        );
+        let already = unique.iter().any(|existing: &MediaSource| {
+            (
+                existing.label.clone().unwrap_or_default(),
+                existing.width.unwrap_or(0),
+                existing.height.unwrap_or(0),
+            ) == key
+        });
+        if !already {
+            unique.push(source);
+        }
+    }
+    unique
 }

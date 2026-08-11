@@ -38,9 +38,17 @@ impl ParseKitBuilder {
         Ok(self)
     }
 
+    /// Registers Bilibili without a session cookie (public quality ladder).
     pub fn bilibili(mut self) -> Result<Self> {
         self.platforms
             .push(Platform::Bilibili(BilibiliResolver::new()?));
+        Ok(self)
+    }
+
+    /// Registers Bilibili with a Cookie header (e.g. `BILIBILI_COOKIE` / SESSDATA).
+    pub fn bilibili_with_cookie(mut self, cookie: impl Into<String>) -> Result<Self> {
+        self.platforms
+            .push(Platform::Bilibili(BilibiliResolver::with_cookie(cookie)?));
         Ok(self)
     }
 

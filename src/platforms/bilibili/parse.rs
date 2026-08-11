@@ -123,16 +123,30 @@ fn collect_durl_sources(play: &Value) -> Vec<MediaSource> {
 
     let item = &durl[0];
     let size_hint = item.get("size").and_then(Value::as_u64);
-    // Progressive playurl requests typically target 1080P (qn=80) first; label
-    // from quality when present, otherwise leave unset for display fallback.
-    let qn_label = play
+    // Progressive `durl` only exposes `quality` + optional `video_codecid` — never invent codecs.
+    let tier = play
         .get("quality")
         .and_then(Value::as_u64)
-        .and_then(bilibili_qn_label)
-        .map(str::to_owned);
+        .and_then(bilibili_qn_label);
+    let codec_tag = play
+        .get("video_codecid")
+        .and_then(Value::as_u64)
+        .and_then(bilibili_codecid_tag);
+    let label = match (tier, codec_tag) {
+        (Some(t), Some(c)) => Some(format!("{t}/{c}")),
+        (Some(t), None) => Some(t.to_owned()),
+        (None, Some(c)) => Some(c.to_owned()),
+        (None, None) => None,
+    };
+    let codec = play
+        .get("video_codecid")
+        .and_then(Value::as_u64)
+        .map(bilibili_codecid_to_codec)
+        .unwrap_or(VideoCodec::Unknown);
     let mut sources = Vec::new();
     if let Some(mut source) = media_url_item_to_source(item, "url", MediaSourceKind::Direct) {
-        source.label = qn_label.clone();
+        source.label = label.clone();
+        source.codec = codec;
         sources.push(source);
     }
     if let Some(backups) = item.get("backup_url").and_then(Value::as_array) {
@@ -141,12 +155,31 @@ fn collect_durl_sources(play: &Value) -> Vec<MediaSource> {
                 && let Some(mut source) =
                     https_media_source(raw, size_hint, MediaSourceKind::Derived)
             {
-                source.label = qn_label.clone();
+                source.label = label.clone();
+                source.codec = codec;
                 sources.push(source);
             }
         }
     }
     sources
+}
+
+/// Bilibili `video_codecid` → short display tag (only known ids).
+fn bilibili_codecid_tag(codecid: u64) -> Option<&'static str> {
+    match codecid {
+        7 => Some("AVC"),
+        12 => Some("HEVC"),
+        13 => Some("AV1"),
+        _ => None,
+    }
+}
+
+fn bilibili_codecid_to_codec(codecid: u64) -> VideoCodec {
+    match codecid {
+        7 => VideoCodec::H264,
+        12 => VideoCodec::H265,
+        _ => VideoCodec::Unknown,
+    }
 }
 
 fn bilibili_qn_label(qn: u64) -> Option<&'static str> {
@@ -183,6 +216,25 @@ fn collect_dash_video_sources(play: &Value) -> Vec<MediaSource> {
             .and_then(Value::as_u64)
             .and_then(|value| u32::try_from(value).ok());
         let size_hint = item.get("size").and_then(Value::as_u64);
+        // Prefer Bilibili stream `id` (qn) labels — more accurate than short-edge tiers.
+        let qn_label = item
+            .get("id")
+            .and_then(Value::as_u64)
+            .and_then(bilibili_qn_label)
+            .map(str::to_owned)
+            .or_else(|| crate::model::resolution_tier_label(width, height).map(str::to_owned));
+        let codec_hint = item
+            .get("codecs")
+            .and_then(Value::as_str)
+            .and_then(dash_codec_short);
+        let label = match (qn_label, codec_hint) {
+            (Some(q), Some(c)) => Some(format!("{q}/{c}")),
+            (Some(q), None) => Some(q),
+            (None, Some(c)) => Some(c.to_owned()),
+            (None, None) => None,
+        };
+        // One primary URL per stream representation. CDN backups would explode the
+        // interactive picker without adding distinct qualities.
         for key in ["base_url", "baseUrl", "url"] {
             if let Some(raw) = item.get(key).and_then(Value::as_str)
                 && let Some(mut source) =
@@ -191,34 +243,27 @@ fn collect_dash_video_sources(play: &Value) -> Vec<MediaSource> {
                 source.width = width;
                 source.height = height;
                 source.bitrate_bps = (bandwidth > 0).then_some(bandwidth);
-                source.label =
-                    crate::model::resolution_tier_label(width, height).map(str::to_owned);
+                source.label = label.clone();
                 ranked.push((bandwidth, source));
                 break;
-            }
-        }
-        if let Some(backups) = item
-            .get("backup_url")
-            .or_else(|| item.get("backupUrl"))
-            .and_then(Value::as_array)
-        {
-            for backup in backups {
-                if let Some(raw) = backup.as_str()
-                    && let Some(mut source) =
-                        https_media_source(raw, size_hint, MediaSourceKind::Derived)
-                {
-                    source.width = width;
-                    source.height = height;
-                    source.bitrate_bps = (bandwidth > 0).then_some(bandwidth);
-                    source.label =
-                        crate::model::resolution_tier_label(width, height).map(str::to_owned);
-                    ranked.push((bandwidth.saturating_sub(1), source));
-                }
             }
         }
     }
     ranked.sort_by_key(|(bandwidth, _)| std::cmp::Reverse(*bandwidth));
     ranked.into_iter().map(|(_, source)| source).collect()
+}
+
+fn dash_codec_short(codecs: &str) -> Option<&'static str> {
+    let lower = codecs.to_ascii_lowercase();
+    if lower.starts_with("avc") || lower.starts_with("avc1") {
+        Some("AVC")
+    } else if lower.starts_with("hev") || lower.starts_with("hvc") {
+        Some("HEVC")
+    } else if lower.starts_with("av01") || lower.starts_with("av1") {
+        Some("AV1")
+    } else {
+        None
+    }
 }
 
 fn media_url_item_to_source(
