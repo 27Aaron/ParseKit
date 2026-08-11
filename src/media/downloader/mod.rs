@@ -134,8 +134,6 @@ impl Drop for DownloadedMedia {
 #[derive(Clone, Debug)]
 pub struct MediaDownloader {
     workspace_dir: Arc<PathBuf>,
-    /// `None` means no download size cap (bots may set one).
-    max_bytes: Option<u64>,
     allowed_hosts: Arc<std::collections::HashSet<String>>,
     request_timeout: Duration,
     request_identity: DownloadRequestIdentity,
@@ -151,45 +149,37 @@ impl MediaDownloader {
     /// Creates a downloader with an explicit host allowlist.
     pub fn with_allowed_hosts(
         workspace_dir: impl Into<PathBuf>,
-        max_bytes: Option<u64>,
         allowed_hosts: impl IntoIterator<Item = impl AsRef<str>>,
     ) -> Result<Self> {
         Self::with_options(
             workspace_dir,
-            max_bytes,
             allowed_hosts,
             REQUEST_TIMEOUT,
             DownloadRequestIdentity::default(),
         )
     }
 
-    pub fn for_wechat_channels(
-        workspace_dir: impl Into<PathBuf>,
-        max_bytes: Option<u64>,
-    ) -> Result<Self> {
+    pub fn for_wechat_channels(workspace_dir: impl Into<PathBuf>) -> Result<Self> {
         Self::with_options(
             workspace_dir,
-            max_bytes,
             platforms::wechat::REVIEWED_MEDIA_HOSTS.iter().copied(),
             REQUEST_TIMEOUT,
             platforms::wechat::download_identity(),
         )
     }
 
-    pub fn for_douyin(workspace_dir: impl Into<PathBuf>, max_bytes: Option<u64>) -> Result<Self> {
+    pub fn for_douyin(workspace_dir: impl Into<PathBuf>) -> Result<Self> {
         Self::with_options(
             workspace_dir,
-            max_bytes,
             platforms::douyin::REVIEWED_MEDIA_HOSTS.iter().copied(),
             REQUEST_TIMEOUT,
             platforms::douyin::download_identity(),
         )
     }
 
-    pub fn for_bilibili(workspace_dir: impl Into<PathBuf>, max_bytes: Option<u64>) -> Result<Self> {
+    pub fn for_bilibili(workspace_dir: impl Into<PathBuf>) -> Result<Self> {
         Self::with_options(
             workspace_dir,
-            max_bytes,
             platforms::bilibili::REVIEWED_MEDIA_HOSTS.iter().copied(),
             REQUEST_TIMEOUT,
             platforms::bilibili::download_identity(),
@@ -199,27 +189,20 @@ impl MediaDownloader {
     pub fn for_platform(
         platform_id: crate::PlatformId,
         workspace_dir: impl Into<PathBuf>,
-        max_bytes: Option<u64>,
     ) -> Result<Self> {
         match platform_id {
-            crate::PlatformId::WechatChannels => {
-                Self::for_wechat_channels(workspace_dir, max_bytes)
-            }
-            crate::PlatformId::Douyin => Self::for_douyin(workspace_dir, max_bytes),
-            crate::PlatformId::Bilibili => Self::for_bilibili(workspace_dir, max_bytes),
+            crate::PlatformId::WechatChannels => Self::for_wechat_channels(workspace_dir),
+            crate::PlatformId::Douyin => Self::for_douyin(workspace_dir),
+            crate::PlatformId::Bilibili => Self::for_bilibili(workspace_dir),
         }
     }
 
     pub fn with_options(
         workspace_dir: impl Into<PathBuf>,
-        max_bytes: Option<u64>,
         allowed_hosts: impl IntoIterator<Item = impl AsRef<str>>,
         request_timeout: Duration,
         request_identity: DownloadRequestIdentity,
     ) -> Result<Self> {
-        if max_bytes == Some(0) {
-            return Err(Error::Config("媒体下载大小上限必须大于零".to_owned()));
-        }
         if request_timeout.is_zero() {
             return Err(Error::Config("媒体下载超时必须大于零".to_owned()));
         }
@@ -227,7 +210,6 @@ impl MediaDownloader {
 
         Ok(Self {
             workspace_dir: Arc::new(workspace_dir.into()),
-            max_bytes,
             allowed_hosts: Arc::new(allowed_hosts),
             request_timeout,
             request_identity,
@@ -235,53 +217,22 @@ impl MediaDownloader {
         })
     }
 
-    /// Optional size budget (`None` = unlimited).
-    pub fn max_bytes(&self) -> Option<u64> {
-        self.max_bytes
-    }
-
-    fn reject_if_too_large(&self, actual: u64) -> Result<()> {
-        if let Some(limit) = self.max_bytes
-            && actual > limit
-        {
-            return Err(Error::MediaTooLarge { actual, limit });
-        }
-        Ok(())
-    }
-
     pub fn allowed_hosts(&self) -> &std::collections::HashSet<String> {
         self.allowed_hosts.as_ref()
     }
 
-    /// Clones this downloader with an equal or lower byte limit.
-    ///
-    /// Use this when a bot or host wants a tighter budget than the parent downloader.
-    pub fn capped(&self, max_bytes: u64) -> Result<Self> {
-        if max_bytes == 0 {
-            return Err(Error::Config("媒体下载大小上限必须大于零".to_owned()));
-        }
-        let limit = match self.max_bytes {
-            None => Some(max_bytes),
-            Some(existing) => Some(existing.min(max_bytes)),
-        };
-
-        Ok(Self {
-            workspace_dir: Arc::clone(&self.workspace_dir),
-            max_bytes: limit,
-            allowed_hosts: Arc::clone(&self.allowed_hosts),
-            request_timeout: self.request_timeout,
-            request_identity: self.request_identity.clone(),
-            disk_write_budget: Arc::clone(&self.disk_write_budget),
-        })
-    }
-
-    pub fn capped_with_timeout(&self, max_bytes: u64, request_timeout: Duration) -> Result<Self> {
+    /// Clones this downloader with a tighter request timeout.
+    pub fn with_timeout(&self, request_timeout: Duration) -> Result<Self> {
         if request_timeout.is_zero() {
             return Err(Error::Config("媒体下载超时必须大于零".to_owned()));
         }
-        let mut downloader = self.capped(max_bytes)?;
-        downloader.request_timeout = downloader.request_timeout.min(request_timeout);
-        Ok(downloader)
+        Ok(Self {
+            workspace_dir: Arc::clone(&self.workspace_dir),
+            allowed_hosts: Arc::clone(&self.allowed_hosts),
+            request_timeout: self.request_timeout.min(request_timeout),
+            request_identity: self.request_identity.clone(),
+            disk_write_budget: Arc::clone(&self.disk_write_budget),
+        })
     }
 
     pub async fn download(&self, source: &MediaSource) -> Result<DownloadedMedia> {
@@ -461,20 +412,14 @@ impl MediaDownloader {
     async fn download_url_within_deadline(
         &self,
         url: &Url,
-        size_hint: Option<u64>,
+        _size_hint: Option<u64>,
         progress_callback: Option<ProgressCallback>,
         decode_key: Option<u64>,
         path: PathBuf,
         mut resume_from: u64,
     ) -> Result<DownloadedMedia> {
-        if let Some(hint) = size_hint {
-            self.reject_if_too_large(hint)?;
-        }
-
         // Allow one full restart when a server ignores `Range`.
         for _ in 0..2 {
-            self.reject_if_too_large(resume_from)?;
-
             let response = self.follow_redirects(url.clone(), resume_from).await?;
             let status = response.status();
             let Some(next_resume) = effective_resume_offset(resume_from, status) else {
@@ -501,9 +446,6 @@ impl MediaDownloader {
             } else {
                 content_length
             };
-            if let Some(total) = total_hint {
-                self.reject_if_too_large(total)?;
-            }
 
             return self
                 .stream_response(
@@ -605,7 +547,6 @@ impl MediaDownloader {
             create_private_file(path.clone()).await?
         };
         let (sender, mut receiver) = tokio::sync::mpsc::channel(4);
-        let writer_limit = self.max_bytes;
         let disk_write_budget = Arc::clone(&self.disk_write_budget);
         let (progress_reporter, _progress_guard) =
             ProgressReporter::new(content_length, progress_callback);
@@ -621,7 +562,6 @@ impl MediaDownloader {
             write_chunks(
                 pending_file,
                 &mut receiver,
-                writer_limit,
                 progress_reporter,
                 disk_write_budget,
                 prefix_xor,
@@ -639,14 +579,9 @@ impl MediaDownloader {
                 let Some(chunk) = chunk else {
                     break;
                 };
-                streamed_bytes =
-                    streamed_bytes
-                        .checked_add(chunk.len() as u64)
-                        .ok_or_else(|| Error::MediaTooLarge {
-                            actual: u64::MAX,
-                            limit: self.max_bytes.unwrap_or(u64::MAX),
-                        })?;
-                self.reject_if_too_large(streamed_bytes)?;
+                streamed_bytes = streamed_bytes
+                    .checked_add(chunk.len() as u64)
+                    .ok_or_else(|| Error::Download("媒体大小计算溢出".into()))?;
 
                 sender
                     .send(chunk)
@@ -687,8 +622,6 @@ impl MediaDownloader {
             Ok(metadata) => metadata.len(),
             Err(_) => return Err(Error::Storage(self.workspace_dir.as_ref().clone())),
         };
-
-        self.reject_if_too_large(disk_bytes)?;
         if disk_bytes != outcome.media.bytes {
             return Err(Error::Download("媒体文件落盘大小不一致".to_owned()));
         }

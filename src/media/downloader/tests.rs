@@ -30,12 +30,8 @@ fn allowed_hosts() -> HashSet<String> {
 
 #[test]
 fn with_allowed_hosts_normalizes_and_exposes_the_set() {
-    let downloader = MediaDownloader::with_allowed_hosts(
-        "media",
-        Some(1_024),
-        ["Example.COM", "cdn.example.org"],
-    )
-    .unwrap();
+    let downloader =
+        MediaDownloader::with_allowed_hosts("media", ["Example.COM", "cdn.example.org"]).unwrap();
 
     assert!(downloader.allowed_hosts().contains("example.com"));
     assert!(downloader.allowed_hosts().contains("cdn.example.org"));
@@ -45,22 +41,22 @@ fn with_allowed_hosts_normalizes_and_exposes_the_set() {
 #[test]
 fn with_allowed_hosts_rejects_empty_or_invalid_entries() {
     assert!(matches!(
-        MediaDownloader::with_allowed_hosts("media", Some(1_024), std::iter::empty::<&str>()),
+        MediaDownloader::with_allowed_hosts("media", std::iter::empty::<&str>()),
         Err(Error::Config(_))
     ));
     assert!(matches!(
-        MediaDownloader::with_allowed_hosts("media", Some(1_024), [".bad", "ok.example"]),
+        MediaDownloader::with_allowed_hosts("media", [".bad", "ok.example"]),
         Err(Error::Config(_))
     ));
     assert!(matches!(
-        MediaDownloader::with_allowed_hosts("media", Some(1_024), ["has space.example"]),
+        MediaDownloader::with_allowed_hosts("media", ["has space.example"]),
         Err(Error::Config(_))
     ));
 }
 
 #[test]
 fn for_wechat_channels_uses_the_reviewed_host_set() {
-    let downloader = MediaDownloader::for_wechat_channels("media", Some(1_024)).unwrap();
+    let downloader = MediaDownloader::for_wechat_channels("media").unwrap();
     for host in platforms::wechat::REVIEWED_MEDIA_HOSTS {
         assert!(
             downloader.allowed_hosts().contains(*host),
@@ -98,7 +94,7 @@ fn host_allowlist_supports_suffix_rules() {
 
 #[test]
 fn for_douyin_uses_reviewed_host_set() {
-    let downloader = MediaDownloader::for_douyin("media", Some(1_024)).unwrap();
+    let downloader = MediaDownloader::for_douyin("media").unwrap();
     for host in platforms::douyin::REVIEWED_MEDIA_HOSTS {
         assert!(
             downloader.allowed_hosts().contains(*host),
@@ -109,15 +105,11 @@ fn for_douyin_uses_reviewed_host_set() {
 
 #[test]
 fn for_platform_maps_known_ids() {
-    let wechat =
-        MediaDownloader::for_platform(crate::PlatformId::WechatChannels, "media", Some(1_024))
-            .unwrap();
+    let wechat = MediaDownloader::for_platform(crate::PlatformId::WechatChannels, "media").unwrap();
     assert!(wechat.allowed_hosts().contains("finder.video.qq.com"));
-    let douyin =
-        MediaDownloader::for_platform(crate::PlatformId::Douyin, "media", Some(1_024)).unwrap();
+    let douyin = MediaDownloader::for_platform(crate::PlatformId::Douyin, "media").unwrap();
     assert!(douyin.allowed_hosts().contains("aweme.snssdk.com"));
-    let _ =
-        MediaDownloader::for_platform(crate::PlatformId::Bilibili, "media", Some(1_024)).unwrap();
+    let _ = MediaDownloader::for_platform(crate::PlatformId::Bilibili, "media").unwrap();
 }
 
 #[tokio::test]
@@ -257,79 +249,10 @@ fn accepts_only_reviewed_https_media_urls() {
     }
 }
 
-#[test]
-fn capped_downloader_preserves_policy_and_only_tightens_limit() {
-    let downloader = MediaDownloader::with_options(
-        "media",
-        Some(100),
-        HashSet::from(["EXAMPLE.COM".to_owned()]),
-        Duration::from_secs(17),
-        DownloadRequestIdentity::default(),
-    )
-    .unwrap();
-
-    let tighter = downloader.capped(25).unwrap();
-    assert_eq!(tighter.max_bytes(), Some(25));
-    assert_eq!(tighter.workspace_dir, downloader.workspace_dir);
-    assert_eq!(tighter.allowed_hosts, downloader.allowed_hosts);
-    assert_eq!(tighter.request_timeout, downloader.request_timeout);
-    assert!(Arc::ptr_eq(
-        &tighter.workspace_dir,
-        &downloader.workspace_dir
-    ));
-    assert!(Arc::ptr_eq(
-        &tighter.allowed_hosts,
-        &downloader.allowed_hosts
-    ));
-
-    let requested_expansion = downloader.capped(1_000).unwrap();
-    assert_eq!(requested_expansion.max_bytes(), Some(100));
-}
-
-#[test]
-fn capped_downloader_rejects_zero_limit() {
-    let downloader = MediaDownloader::with_options(
-        "media",
-        Some(100),
-        HashSet::from(["example.com".to_owned()]),
-        Duration::from_secs(17),
-        DownloadRequestIdentity::default(),
-    )
-    .unwrap();
-
-    assert!(matches!(downloader.capped(0), Err(Error::Config(_))));
-}
-
-#[test]
-fn capped_downloader_can_also_tighten_the_timeout() {
-    let downloader = MediaDownloader::with_options(
-        "media",
-        Some(100),
-        HashSet::from(["example.com".to_owned()]),
-        Duration::from_secs(120),
-        DownloadRequestIdentity::default(),
-    )
-    .unwrap();
-
-    let tighter = downloader
-        .capped_with_timeout(25, Duration::from_secs(30))
-        .unwrap();
-    assert_eq!(tighter.max_bytes(), Some(25));
-    assert_eq!(tighter.request_timeout, Duration::from_secs(30));
-
-    let unchanged = downloader
-        .capped_with_timeout(1_000, Duration::from_secs(300))
-        .unwrap();
-    assert_eq!(unchanged.max_bytes(), Some(100));
-    assert_eq!(unchanged.request_timeout, Duration::from_secs(120));
-    assert!(downloader.capped_with_timeout(25, Duration::ZERO).is_err());
-}
-
 #[tokio::test]
 async fn direct_url_download_still_rejects_disallowed_hosts_before_network_io() {
     let downloader = MediaDownloader::with_options(
         "media",
-        Some(100),
         HashSet::from(["allowed.example".to_owned()]),
         Duration::from_secs(17),
         DownloadRequestIdentity::default(),
@@ -429,7 +352,6 @@ fn reports_each_crossed_threshold_once_after_writes() {
     let mut outcome = write_chunks(
         pending_file,
         &mut receiver,
-        Some(8),
         reporter,
         disk_write_budget,
         None,
@@ -538,9 +460,15 @@ fn into_path_disarms_drop_cleanup() {
 }
 
 #[test]
-fn unlimited_when_max_bytes_is_none() {
-    let downloader = MediaDownloader::for_douyin("media", None).unwrap();
-    assert_eq!(downloader.max_bytes(), None);
-    let capped = downloader.capped(50).unwrap();
-    assert_eq!(capped.max_bytes(), Some(50));
+fn with_timeout_tightens_request_timeout() {
+    let downloader = MediaDownloader::with_options(
+        "media",
+        HashSet::from(["example.com".to_owned()]),
+        Duration::from_secs(120),
+        DownloadRequestIdentity::default(),
+    )
+    .unwrap();
+    let tighter = downloader.with_timeout(Duration::from_secs(30)).unwrap();
+    assert_eq!(tighter.request_timeout, Duration::from_secs(30));
+    assert!(downloader.with_timeout(Duration::ZERO).is_err());
 }

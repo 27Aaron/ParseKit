@@ -34,15 +34,11 @@ fn main() -> ExitCode {
             Commands::Download {
                 input,
                 output,
-                max_bytes,
                 prefer,
                 source,
                 first_only,
                 json,
-            } => {
-                commands::download(&input, output, max_bytes, prefer, source, first_only, json)
-                    .await
-            }
+            } => commands::download(&input, output, prefer, source, first_only, json).await,
             Commands::Platforms { check } => commands::platforms(check),
             Commands::Doctor => commands::doctor(),
         }

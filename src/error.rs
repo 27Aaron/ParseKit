@@ -32,9 +32,6 @@ pub enum Error {
     #[error("媒体文件无效：{0}")]
     InvalidMedia(String),
 
-    #[error("媒体文件超过允许大小：{actual} > {limit} 字节")]
-    MediaTooLarge { actual: u64, limit: u64 },
-
     #[error("临时目录不可用：{0}")]
     Storage(PathBuf),
 

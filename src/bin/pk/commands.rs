@@ -25,7 +25,6 @@ pub async fn resolve(input: &str, json: bool) -> Result<()> {
 pub async fn download(
     input: &str,
     output: Option<PathBuf>,
-    max_bytes: Option<u64>,
     prefer: Prefer,
     source: Option<usize>,
     first_only: bool,
@@ -34,9 +33,7 @@ pub async fn download(
     let kit = build_kit()?;
     let post = kit.resolve_text(input).await?;
     let dir = output.unwrap_or_else(config::default_output_dir);
-    // CLI: no default size cap; optional --max-bytes / PARSE_KIT_MAX_BYTES only.
-    let limit = max_bytes.or_else(config::env_max_bytes);
-    let downloader = kit.media_downloader_for(&post, &dir, limit)?;
+    let downloader = kit.media_downloader_for(&post, &dir)?;
 
     let multi_image = post.kind == ContentKind::ImageSet && source.is_none() && !first_only;
 
