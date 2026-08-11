@@ -1,12 +1,4 @@
-//! Douyin (抖音) resolver.
-//!
-//! Strategy: expand short links → extract `aweme_id` → fetch the public share
-//! page (`iesdouyin.com/share/video/{id}`) → parse `window._ROUTER_DATA` for
-//! `videoInfoRes.item_list[0]`.
-//!
-//! This path avoids cookie/signing when the share page still embeds item data.
-//! Image / note posts are rejected with [`Error::MediaUnavailable`] until the
-//! multi-media model lands.
+//! Douyin: short link → aweme_id → share page `_ROUTER_DATA`.
 
 use std::time::Duration;
 
@@ -40,17 +32,11 @@ const MEDIA_USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleW
 const DOUYIN_ORIGIN: &str = "https://www.douyin.com";
 const DOUYIN_REFERER: &str = "https://www.douyin.com/";
 
-/// Reviewed Douyin media hosts / host-suffixes for download allowlisting.
-///
-/// Entries that start with `.` are **suffix rules** (e.g. `.douyinvod.com` matches
-/// `v3-web.douyinvod.com` but not `douyinvod.com` itself). Exact hostnames match
-/// only themselves. Review new CDN families before adding them.
+/// Download allowlist. Entries starting with `.` are suffix rules.
 pub const REVIEWED_MEDIA_HOSTS: &[&str] = &[
-    // Play API / redirect front doors
     "aweme.snssdk.com",
     "www.douyin.com",
     "www.iesdouyin.com",
-    // Common ByteDance video CDN suffix families
     ".douyinvod.com",
     ".douyincdn.com",
     ".bytevcloudcdn.com",
@@ -62,10 +48,8 @@ pub const REVIEWED_MEDIA_HOSTS: &[&str] = &[
     ".pstatp.com",
 ];
 
-/// Backward-compatible alias used by older call sites and docs.
 pub const REVIEWED_DOUYIN_MEDIA_HOSTS: &[&str] = REVIEWED_MEDIA_HOSTS;
 
-/// Hosts we may follow while expanding short share links.
 const REDIRECT_HOSTS: &[&str] = &[
     "v.douyin.com",
     "www.douyin.com",
@@ -74,7 +58,6 @@ const REDIRECT_HOSTS: &[&str] = &[
     "iesdouyin.com",
 ];
 
-/// Origin / Referer / User-Agent for Douyin media CDN requests.
 pub fn download_identity() -> DownloadRequestIdentity {
     DownloadRequestIdentity {
         origin: Some(DOUYIN_ORIGIN.to_owned()),
@@ -159,7 +142,6 @@ impl DouyinResolver {
                 .map_err(|error| map_douyin_network_error(&error))?;
 
             if !response.status().is_redirection() {
-                // Some short links return 200 with a final URL already set.
                 return Ok(response.url().clone());
             }
 
@@ -231,7 +213,6 @@ impl PlatformResolver for DouyinResolver {
     }
 }
 
-/// Extract the first Douyin share URL from free-form text.
 pub fn extract_share_url(input: &str) -> Result<Url> {
     static URL_PATTERN: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
     let pattern = URL_PATTERN.get_or_init(|| {
@@ -318,8 +299,7 @@ fn extract_aweme_id(input: &str) -> Option<String> {
 }
 
 fn parse_router_data(html: &str) -> Result<Value> {
-    // Nested JSON breaks non-greedy `\{.*?\}` regexes; slice from the assignment
-    // marker to the closing script tag instead.
+    // Slice JSON between assignment and </script> (nested braces break regex).
     const MARKER: &str = "window._ROUTER_DATA";
     let marker_at = html.find(MARKER).ok_or(Error::UpstreamChanged)?;
     let after_marker = &html[marker_at + MARKER.len()..];
@@ -337,8 +317,7 @@ fn parse_router_data(html: &str) -> Result<Value> {
 }
 
 fn build_post_from_router(aweme_id: &str, router: &Value) -> Result<ResolvedPost> {
-    // Share-page key is literally `video_(id)/page` (slash is part of the name).
-    // JSON Pointer encodes `/` as `~1`.
+    // Key is `video_(id)/page`; `/` → `~1` in JSON Pointer.
     let page = router
         .pointer("/loaderData/video_(id)~1page")
         .ok_or(Error::UpstreamChanged)?;
@@ -365,7 +344,7 @@ fn build_post_from_router(aweme_id: &str, router: &Value) -> Result<ResolvedPost
         .and_then(|items| items.first())
         .ok_or(Error::NotFound)?;
 
-    // Image / slideshow posts are not modeled yet.
+    // Image / note posts: not supported yet.
     if item
         .get("images")
         .and_then(Value::as_array)
@@ -398,13 +377,13 @@ fn build_post_from_router(aweme_id: &str, router: &Value) -> Result<ResolvedPost
     let canonical_url = Url::parse(&format!("https://www.douyin.com/video/{post_id}"))
         .expect("aweme id forms a valid URL");
 
-    Ok(ResolvedPost {
-        platform: "douyin".into(),
+    Ok(ResolvedPost::new_video(
+        "douyin",
         post_id,
         canonical_url,
         title,
         cover_url,
-        video: MediaSource {
+        MediaSource {
             url: play_url,
             codec: VideoCodec::Unknown,
             provenance: MediaSourceKind::Direct,
@@ -413,12 +392,12 @@ fn build_post_from_router(aweme_id: &str, router: &Value) -> Result<ResolvedPost
             size_hint: None,
             decode_key: None,
         },
-        fallback_videos: Vec::new(),
-    })
+        Vec::new(),
+    ))
 }
 
 fn pick_play_url(video: &Value) -> Result<(Url, Option<u32>, Option<u32>)> {
-    // Prefer bit_rate entries (higher quality) when present.
+    // Prefer bit_rate (usually higher quality).
     if let Some(bit_rates) = video.get("bit_rate").and_then(Value::as_array) {
         let mut ranked = bit_rates.iter().collect::<Vec<_>>();
         ranked.sort_by_key(|item| {
@@ -443,7 +422,7 @@ fn pick_play_url(video: &Value) -> Result<(Url, Option<u32>, Option<u32>)> {
         return Ok(result);
     }
 
-    // Fallback: construct watermark-free play API from video uri.
+    // Fallback: watermark-free play API from uri.
     if let Some(uri) = video
         .pointer("/play_addr/uri")
         .and_then(Value::as_str)

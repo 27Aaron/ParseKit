@@ -1,9 +1,5 @@
 use std::path::PathBuf;
 
-/// Domain errors for resolve and media download.
-///
-/// Delivery shells (Telegram, Feishu, CLI, …) map these into product-facing
-/// messages; this crate stays free of chat-platform and i18n concerns.
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     #[error("配置错误：{0}")]

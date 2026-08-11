@@ -43,10 +43,7 @@ const DEFAULT_MEDIA_USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64
 const PROGRESS_THRESHOLDS: [u8; 5] = [20, 40, 60, 80, 100];
 const DOWNLOAD_RETRY_DELAYS: [Duration; 2] = [Duration::from_secs(1), Duration::from_secs(2)];
 
-/// Optional Origin / Referer / User-Agent applied to media HTTP requests.
-///
-/// Prefer platform helpers (`platforms::wechat::download_identity`,
-/// `platforms::douyin::download_identity`) over hand-rolled values.
+/// Origin / Referer / User-Agent for media requests.
 #[derive(Clone, Debug, Default)]
 pub struct DownloadRequestIdentity {
     pub origin: Option<String>,
@@ -55,22 +52,16 @@ pub struct DownloadRequestIdentity {
 }
 
 impl DownloadRequestIdentity {
-    /// WeChat Channels CDN identity (delegates to the WeChat platform module).
     pub fn wechat_channels() -> Self {
         platforms::wechat::download_identity()
     }
 
-    /// Douyin CDN identity (delegates to the Douyin platform module).
     pub fn douyin() -> Self {
         platforms::douyin::download_identity()
     }
 }
 
-/// Progress reported after source bytes have actually been written to disk.
-///
-/// Events are emitted only when the final media response provides a valid,
-/// non-zero `Content-Length`. `percent` is therefore always one of 20, 40, 60,
-/// 80, or 100 and is never estimated from a parser-provided size hint.
+/// On-disk progress (20/40/60/80/100% when Content-Length is known).
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct DownloadProgress {
     pub downloaded_bytes: u64,
@@ -80,10 +71,7 @@ pub struct DownloadProgress {
 
 type ProgressCallback = Arc<dyn Fn(DownloadProgress) + Send + Sync + 'static>;
 
-// Keep this deliberately narrow. New Tencent CDN names must be reviewed before
-// being added; accepting all of qq.com would turn redirects into an SSRF surface.
-/// A completed media download. The caller owns the file until it calls
-/// [`DownloadedMedia::cleanup`].
+/// Finished download; call [`DownloadedMedia::cleanup`] when done.
 #[derive(Debug)]
 #[must_use = "downloaded media must be uploaded or explicitly cleaned up"]
 pub struct DownloadedMedia {
@@ -92,8 +80,6 @@ pub struct DownloadedMedia {
 }
 
 impl DownloadedMedia {
-    /// Explicitly remove the downloaded file. A file already removed is treated
-    /// as successfully cleaned up, which makes retrying cleanup safe.
     pub async fn cleanup(&self) -> Result<()> {
         match tokio::fs::remove_file(&self.path).await {
             Ok(()) => Ok(()),
@@ -105,14 +91,11 @@ impl DownloadedMedia {
 
 impl Drop for DownloadedMedia {
     fn drop(&mut self) {
-        // Best-effort RAII cleanup also covers task cancellation and runtime
-        // shutdown. Explicit cleanup is still used so errors can be reported.
         let _ = std::fs::remove_file(&self.path);
     }
 }
 
-/// Downloads media into the configured task workspace while enforcing URL,
-/// network, redirect, and byte-count limits.
+/// HTTPS media download with host allowlist, redirect limits, and size caps.
 #[derive(Clone, Debug)]
 pub struct MediaDownloader {
     workspace_dir: Arc<PathBuf>,
@@ -129,14 +112,7 @@ struct DiskWriteBudget {
 }
 
 impl MediaDownloader {
-    /// Construct a downloader with an **explicit** reviewed CDN host allowlist.
-    ///
-    /// Multi-platform apps should pass only the hosts needed for the media they
-    /// are about to fetch (typically the resolved post's platform). Never open
-    /// this set to arbitrary domains — redirects become an SSRF surface.
-    ///
-    /// Host comparison is case-insensitive. Empty lists and invalid names are
-    /// rejected at construction time.
+    /// Explicit host allowlist (empty / invalid lists rejected).
     pub fn with_allowed_hosts(
         workspace_dir: impl Into<PathBuf>,
         max_bytes: u64,
@@ -151,9 +127,6 @@ impl MediaDownloader {
         )
     }
 
-    /// Convenience constructor locked to reviewed WeChat Channels CDN hosts.
-    ///
-    /// Host list and request identity come from [`platforms::wechat`].
     pub fn for_wechat_channels(workspace_dir: impl Into<PathBuf>, max_bytes: u64) -> Result<Self> {
         Self::with_options(
             workspace_dir,
@@ -164,9 +137,6 @@ impl MediaDownloader {
         )
     }
 
-    /// Convenience constructor for reviewed Douyin media hosts / suffixes.
-    ///
-    /// Host list and request identity come from [`platforms::douyin`].
     pub fn for_douyin(workspace_dir: impl Into<PathBuf>, max_bytes: u64) -> Result<Self> {
         Self::with_options(
             workspace_dir,
@@ -177,18 +147,25 @@ impl MediaDownloader {
         )
     }
 
-    /// Backward-compatible alias for [`Self::for_wechat_channels`].
-    ///
-    /// Prefer [`Self::with_allowed_hosts`] or [`Self::for_wechat_channels`] so the
-    /// allowlist choice is explicit when more platforms land.
-    #[deprecated(
-        note = "use MediaDownloader::for_wechat_channels or with_allowed_hosts so the CDN allowlist is explicit"
-    )]
+    pub fn for_platform(
+        platform_id: &str,
+        workspace_dir: impl Into<PathBuf>,
+        max_bytes: u64,
+    ) -> Result<Self> {
+        match platform_id {
+            "wechat_channels" => Self::for_wechat_channels(workspace_dir, max_bytes),
+            "douyin" => Self::for_douyin(workspace_dir, max_bytes),
+            other => Err(Error::Config(format!(
+                "未知平台，无法选择媒体下载 allowlist: {other}"
+            ))),
+        }
+    }
+
+    #[deprecated(note = "use for_wechat_channels or with_allowed_hosts")]
     pub fn new(workspace_dir: impl Into<PathBuf>, max_bytes: u64) -> Result<Self> {
         Self::for_wechat_channels(workspace_dir, max_bytes)
     }
 
-    /// Full constructor: explicit allowlist, timeout, and request identity.
     pub fn with_options(
         workspace_dir: impl Into<PathBuf>,
         max_bytes: u64,
@@ -214,17 +191,11 @@ impl MediaDownloader {
         })
     }
 
-    /// Reviewed hosts / suffix rules this downloader will accept (lowercase).
     pub fn allowed_hosts(&self) -> &HashSet<String> {
         self.allowed_hosts.as_ref()
     }
 
-    /// Return a downloader that shares this instance's storage and network
-    /// policy while enforcing an equal or stricter byte limit.
-    ///
-    /// This is intended for callers that need to fetch a smaller auxiliary
-    /// asset without constructing a second HTTP client policy. Asking for a
-    /// larger limit never weakens the original downloader's cap.
+    /// Same policy, stricter or equal byte limit.
     pub fn capped(&self, max_bytes: u64) -> Result<Self> {
         if max_bytes == 0 {
             return Err(Error::Config("媒体下载大小上限必须大于零".to_owned()));
@@ -240,7 +211,6 @@ impl MediaDownloader {
         })
     }
 
-    /// Return a downloader with stricter byte and request-duration limits.
     pub fn capped_with_timeout(&self, max_bytes: u64, request_timeout: Duration) -> Result<Self> {
         if request_timeout.is_zero() {
             return Err(Error::Config("媒体下载超时必须大于零".to_owned()));
@@ -250,27 +220,16 @@ impl MediaDownloader {
         Ok(downloader)
     }
 
-    /// Download a resolved media source. Its parser-provided size hint is an
-    /// early limit only; Content-Length and streamed bytes are checked again.
     pub async fn download(&self, source: &MediaSource) -> Result<DownloadedMedia> {
         self.download_url_with_callback(&source.url, source.size_hint, None)
             .await
     }
 
-    /// Download a URL without a parser-provided size hint.
-    ///
-    /// The request still passes through the downloader's host allowlist, DNS
-    /// pinning, redirect validation, timeout, and streaming byte limit.
     pub async fn download_url(&self, url: &Url) -> Result<DownloadedMedia> {
         self.download_url_with_callback(url, None, None).await
     }
 
-    /// Download a resolved media source and report actual on-disk progress.
-    ///
-    /// The callback is synchronous and should return quickly (for example by
-    /// sending the event through a channel). It is called at most once for each
-    /// 20%, 40%, 60%, 80%, and 100% threshold. If the final response has no trustworthy
-    /// total size, the download still succeeds but no percentage event is sent.
+    /// Progress callback: quick, sync; thresholds 20/40/60/80/100 when length known.
     pub async fn download_with_progress<F>(
         &self,
         source: &MediaSource,
@@ -534,8 +493,7 @@ where
 }
 
 fn is_transient_download_error(error: &Error) -> bool {
-    // A 429 may carry a server-specific Retry-After value that Error does
-    // not preserve. Surface it instead of guessing a delay and adding load.
+    // RateLimited is not retried here (no Retry-After).
     matches!(error, Error::Network(_))
 }
 
@@ -581,14 +539,12 @@ fn validate_media_url<'a>(url: &'a Url, allowed_hosts: &HashSet<String>) -> Resu
     Ok(host)
 }
 
-/// Exact host match, or suffix rules stored as entries starting with `.`.
 fn host_is_allowed(host: &str, allowed_hosts: &HashSet<String>) -> bool {
     if allowed_hosts.contains(host) {
         return true;
     }
+    // ".cdn.example" matches subdomains only, not the bare apex.
     allowed_hosts.iter().any(|entry| {
-        // Suffix rules look like ".douyinvod.com" and require a subdomain label
-        // (`v3.douyinvod.com` matches; bare `douyinvod.com` does not).
         entry.starts_with('.') && host.len() > entry.len() && host.ends_with(entry.as_str())
     })
 }
@@ -711,7 +667,6 @@ fn map_reqwest_download_error(error: reqwest::Error) -> Error {
     if error.is_timeout() {
         Error::Network("媒体请求超时".to_owned())
     } else {
-        // Do not format `error`: reqwest errors may include the signed URL.
         Error::Network("媒体网络请求失败".to_owned())
     }
 }
@@ -754,8 +709,6 @@ fn disk_space_is_sufficient(available_bytes: u128, pending_write_bytes: u64) -> 
 
 #[cfg(not(unix))]
 fn ensure_free_disk_space(_directory: &Path, _pending_write_bytes: u64) -> Result<()> {
-    // The supported deployment targets are Unix. Keep the write path portable;
-    // non-Unix deployments should enforce a volume quota externally.
     Ok(())
 }
 
@@ -952,7 +905,6 @@ impl PendingFile {
 
 impl Drop for PendingFile {
     fn drop(&mut self) {
-        // Close first so cleanup is reliable on every supported platform.
         drop(self.file.take());
         if self.armed {
             let _ = std::fs::remove_file(&self.path);
@@ -972,7 +924,6 @@ fn valid_host_name(host: &str) -> bool {
 
 fn valid_allowlist_entry(entry: &str) -> bool {
     if let Some(suffix) = entry.strip_prefix('.') {
-        // Suffix rules must look like ".cdn.example" (dot + multi-label host).
         valid_host_name(suffix) && suffix.contains('.')
     } else {
         valid_host_name(entry)
@@ -1081,6 +1032,18 @@ mod tests {
                 "missing reviewed host {host}"
             );
         }
+    }
+
+    #[test]
+    fn for_platform_maps_known_ids() {
+        let wechat = MediaDownloader::for_platform("wechat_channels", "media", 1_024).unwrap();
+        assert!(wechat.allowed_hosts().contains("finder.video.qq.com"));
+        let douyin = MediaDownloader::for_platform("douyin", "media", 1_024).unwrap();
+        assert!(douyin.allowed_hosts().contains("aweme.snssdk.com"));
+        assert!(matches!(
+            MediaDownloader::for_platform("unknown", "media", 1_024),
+            Err(Error::Config(_))
+        ));
     }
 
     #[tokio::test]

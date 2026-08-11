@@ -1,20 +1,17 @@
-//! Shared helpers used by multiple platform resolvers.
-//!
-//! Keep this module free of platform-specific endpoints, cookies, and CDN hosts.
+//! Shared helpers for platform resolvers.
 
 use crate::{Error, Result};
 
-/// Trailing punctuation often stuck to URLs when users paste share text.
+/// Trailing punctuation from chat paste.
 pub const URL_TRAILING_PUNCT: &[char] = &[
     '。', '，', ',', '.', '！', '!', '？', '?', ')', '）', ']', '】', '、',
 ];
 
-/// Strip chat-punctuation tails from a regex-matched URL candidate.
 pub fn trim_url_candidate(matched: &str) -> &str {
     matched.trim_end_matches(URL_TRAILING_PUNCT)
 }
 
-/// Map a transport error without formatting `reqwest::Error` (may embed signed URLs).
+/// Do not format `reqwest::Error` (may contain signed URLs).
 pub fn map_network_error(error: &reqwest::Error, timeout_msg: &str, fail_msg: &str) -> Error {
     if error.is_timeout() {
         Error::Network(timeout_msg.into())
@@ -23,7 +20,6 @@ pub fn map_network_error(error: &reqwest::Error, timeout_msg: &str, fail_msg: &s
     }
 }
 
-/// Default display title when a resolved post has no usable title field.
 pub fn default_title_for_platform(platform: &str) -> &'static str {
     match platform {
         "wechat_channels" => "微信视频号视频",
@@ -32,7 +28,6 @@ pub fn default_title_for_platform(platform: &str) -> &'static str {
     }
 }
 
-/// Platform-aware short title for delivery shells.
 pub fn display_title_for_post(platform: &str, title: Option<&str>) -> String {
     title
         .map(str::trim)
@@ -43,12 +38,10 @@ pub fn display_title_for_post(platform: &str, title: Option<&str>) -> String {
         .collect()
 }
 
-/// Platform-aware short title from a resolved post.
 pub fn display_title(post: &crate::ResolvedPost) -> String {
     display_title_for_post(post.platform.as_str(), post.title.as_deref())
 }
 
-/// Read at most `max_bytes` from a response body; reject oversized payloads.
 pub async fn read_body_limited(
     response: reqwest::Response,
     max_bytes: usize,

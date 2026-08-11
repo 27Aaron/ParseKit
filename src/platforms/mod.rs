@@ -1,17 +1,8 @@
-//! Multi-platform resolvers and registration.
+//! Platform resolvers.
 //!
-//! # Adding a platform
-//!
-//! 1. Add `platforms/<name>.rs` (or a subdirectory) with a concrete resolver.
-//! 2. Implement [`PlatformResolver`] for that type.
-//! 3. Add a variant to [`Platform`] and forward methods in its `impl`.
-//! 4. Register it via [`crate::ParseKit::builder`] (order is match order).
-//! 5. If the matcher is stateless, also list its free `extract_share_url` in
-//!    [`STATELESS_EXTRACTORS`] so [`crate::ParseKit::extract_share_url`] works
-//!    without a hub instance.
-//!
-//! Platform-private data (CDN hosts, cookies, decrypt) stays under that
-//! platform's module — not in shared `model` / `media`.
+//! Add a platform: implement [`PlatformResolver`], add [`Platform`] variant,
+//! register in builder / [`STATELESS_EXTRACTORS`], wire
+//! [`crate::media::MediaDownloader::for_platform`].
 
 use std::future::Future;
 
@@ -26,37 +17,21 @@ pub mod wechat;
 pub use douyin::DouyinResolver;
 pub use wechat::WechatResolver;
 
-/// Stateless URL matchers in default registration order (WeChat, then Douyin).
-///
-/// This is the single source of truth for match order used by
-/// [`extract_share_url`] and documented for [`crate::ParseKit::builder`].
+/// Match order for share text (WeChat, then Douyin).
 pub const STATELESS_EXTRACTORS: &[fn(&str) -> Result<Url>] =
     &[wechat::extract_share_url, douyin::extract_share_url];
 
-/// Contract every platform resolver implements.
-///
-/// Implement this on a concrete type, then register it via [`Platform`] so
-/// [`crate::ParseKit`] can dispatch without product code changes.
 pub trait PlatformResolver {
-    /// Stable id written into [`ResolvedPost::platform`].
     fn platform_id(&self) -> &'static str;
 
-    /// Extract a canonical share URL for this platform from free-form text.
-    ///
-    /// Return [`Error::UnsupportedUrl`] when the input is not for this platform.
+    /// `UnsupportedUrl` if this platform does not own the input.
     fn extract_share_url(&self, input: &str) -> Result<Url>;
 
-    /// Resolve free-form share text into a post.
     fn resolve_text(&self, input: &str) -> impl Future<Output = Result<ResolvedPost>> + Send;
 
-    /// Resolve an already-parsed URL into a post.
     fn resolve_url(&self, url: &Url) -> impl Future<Output = Result<ResolvedPost>> + Send;
 }
 
-/// Registered platform backends for this build.
-///
-/// New platforms are added as enum variants. The hub stores them in a `Vec`
-/// and tries them in order.
 #[derive(Debug, Clone)]
 pub enum Platform {
     Wechat(WechatResolver),
@@ -107,7 +82,6 @@ impl Platform {
     }
 }
 
-/// Static extract without a [`crate::ParseKit`] instance.
 pub fn extract_share_url(input: &str) -> Result<Url> {
     for extract in STATELESS_EXTRACTORS {
         match extract(input) {
@@ -147,7 +121,6 @@ mod tests {
     #[test]
     fn default_match_order_is_wechat_then_douyin() {
         assert_eq!(STATELESS_EXTRACTORS.len(), 2);
-        // Ambiguous free text is not expected; order is documented for hub registration.
         let wechat = wechat::extract_share_url("https://weixin.qq.com/sph/A27pGwf5f9").unwrap();
         let douyin = douyin::extract_share_url("https://v.douyin.com/iAbCdEf/").unwrap();
         assert!(wechat.as_str().contains("weixin"));

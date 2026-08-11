@@ -3,6 +3,8 @@ use std::fmt;
 use serde::{Deserialize, Serialize};
 use url::Url;
 
+use crate::Result;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum VideoCodec {
@@ -19,6 +21,71 @@ pub enum MediaSourceKind {
     Generic,
     Direct,
     Derived,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ContentKind {
+    Video,
+    ImageSet,
+    Audio,
+    Mixed,
+    Unknown,
+}
+
+#[derive(Clone)]
+pub enum MediaItem {
+    Video {
+        primary: MediaSource,
+        fallbacks: Vec<MediaSource>,
+    },
+    Image {
+        source: MediaSource,
+    },
+    Audio {
+        source: MediaSource,
+    },
+}
+
+impl fmt::Debug for MediaItem {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Video { primary, fallbacks } => formatter
+                .debug_struct("Video")
+                .field("primary", primary)
+                .field("fallback_count", &fallbacks.len())
+                .finish(),
+            Self::Image { source } => formatter
+                .debug_struct("Image")
+                .field("source", source)
+                .finish(),
+            Self::Audio { source } => formatter
+                .debug_struct("Audio")
+                .field("source", source)
+                .finish(),
+        }
+    }
+}
+
+impl MediaItem {
+    pub fn as_video(&self) -> Option<(&MediaSource, &[MediaSource])> {
+        match self {
+            Self::Video { primary, fallbacks } => Some((primary, fallbacks.as_slice())),
+            _ => None,
+        }
+    }
+
+    pub fn sources(&self) -> Vec<&MediaSource> {
+        match self {
+            Self::Video { primary, fallbacks } => {
+                let mut list = Vec::with_capacity(1 + fallbacks.len());
+                list.push(primary);
+                list.extend(fallbacks.iter());
+                list
+            }
+            Self::Image { source } | Self::Audio { source } => vec![source],
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -48,7 +115,7 @@ impl fmt::Debug for MediaSource {
     }
 }
 
-/// Platform-agnostic resolved post ready for download / delivery.
+/// Resolved post. Prefer [`Self::new_video`] so `media` and `video` stay in sync.
 #[derive(Clone)]
 pub struct ResolvedPost {
     pub platform: String,
@@ -56,6 +123,8 @@ pub struct ResolvedPost {
     pub canonical_url: Url,
     pub title: Option<String>,
     pub cover_url: Option<Url>,
+    pub kind: ContentKind,
+    pub media: Vec<MediaItem>,
     pub video: MediaSource,
     pub fallback_videos: Vec<MediaSource>,
 }
@@ -68,6 +137,8 @@ impl fmt::Debug for ResolvedPost {
             .field("post_id", &self.post_id)
             .field("canonical_url", &"<redacted>")
             .field("title", &self.title)
+            .field("kind", &self.kind)
+            .field("media_count", &self.media.len())
             .field("has_cover", &self.cover_url.is_some())
             .field("video", &self.video)
             .field("fallback_video_count", &self.fallback_videos.len())
@@ -76,19 +147,50 @@ impl fmt::Debug for ResolvedPost {
 }
 
 impl ResolvedPost {
+    pub fn new_video(
+        platform: impl Into<String>,
+        post_id: impl Into<String>,
+        canonical_url: Url,
+        title: Option<String>,
+        cover_url: Option<Url>,
+        video: MediaSource,
+        fallback_videos: Vec<MediaSource>,
+    ) -> Self {
+        let media = vec![MediaItem::Video {
+            primary: video.clone(),
+            fallbacks: fallback_videos.clone(),
+        }];
+        Self {
+            platform: platform.into(),
+            post_id: post_id.into(),
+            canonical_url,
+            title,
+            cover_url,
+            kind: ContentKind::Video,
+            media,
+            video,
+            fallback_videos,
+        }
+    }
+
     pub fn media_sources(&self) -> impl Iterator<Item = &MediaSource> {
         std::iter::once(&self.video).chain(self.fallback_videos.iter())
     }
 
-    /// Short title for display using a platform-agnostic fallback (`"视频"`).
-    ///
-    /// For platform-specific defaults (e.g. `"微信视频号视频"`), use
-    /// [`crate::platforms::util::display_title_for_post`].
+    pub fn primary_video(&self) -> Option<&MediaSource> {
+        self.media
+            .iter()
+            .find_map(|item| item.as_video().map(|(primary, _)| primary))
+    }
+
+    pub fn require_primary_video(&self) -> Result<&MediaSource> {
+        Ok(self.primary_video().unwrap_or(&self.video))
+    }
+
     pub fn display_title(&self) -> String {
         self.display_title_or("视频")
     }
 
-    /// Short title for display with a caller-supplied fallback.
     pub fn display_title_or(&self, fallback: &str) -> String {
         self.title
             .as_deref()
@@ -98,5 +200,46 @@ impl ResolvedPost {
             .chars()
             .take(180)
             .collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sample_source(path: &str) -> MediaSource {
+        MediaSource {
+            url: Url::parse(&format!("https://cdn.example/{path}")).unwrap(),
+            codec: VideoCodec::H264,
+            provenance: MediaSourceKind::Direct,
+            width: Some(720),
+            height: Some(1280),
+            size_hint: None,
+            decode_key: None,
+        }
+    }
+
+    #[test]
+    fn new_video_keeps_media_list_and_legacy_fields_aligned() {
+        let primary = sample_source("a.mp4");
+        let fallback = sample_source("b.mp4");
+        let post = ResolvedPost::new_video(
+            "douyin",
+            "1",
+            Url::parse("https://www.douyin.com/video/1").unwrap(),
+            Some("t".into()),
+            None,
+            primary.clone(),
+            vec![fallback.clone()],
+        );
+        assert_eq!(post.kind, ContentKind::Video);
+        assert_eq!(post.media.len(), 1);
+        assert_eq!(post.video.url, primary.url);
+        assert_eq!(post.fallback_videos[0].url, fallback.url);
+        assert_eq!(
+            post.primary_video().map(|s| s.url.as_str()),
+            Some(primary.url.as_str())
+        );
+        assert_eq!(post.media_sources().count(), 2);
     }
 }

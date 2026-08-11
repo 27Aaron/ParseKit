@@ -1,7 +1,4 @@
-//! WeChat Channels (微信视频号) resolver and media helpers.
-//!
-//! Platform-private pieces live here so the shared `model` / `media` layers stay
-//! free of Yuanbao endpoints, CDN hosts, and decode-key crypto.
+//! WeChat Channels (视频号).
 
 mod decrypt;
 mod hosts;

@@ -33,14 +33,12 @@ const FFPROBE_BINARY_NAME: &str = "ffprobe.exe";
 #[derive(Debug, Clone, PartialEq)]
 pub struct MediaProbe {
     pub codec: VideoCodec,
-    /// Display width after applying sample aspect ratio and orientation metadata.
     pub width: u32,
-    /// Display height after applying sample aspect ratio and orientation metadata.
     pub height: u32,
     pub duration_seconds: Option<f64>,
 }
 
-/// Inspect a local media file with a fixed, non-shell ffprobe invocation.
+/// Probe a local file with ffprobe (file protocol only).
 pub async fn probe_media(path: impl AsRef<Path>) -> Result<MediaProbe> {
     let path = path.as_ref();
     let metadata = tokio::fs::metadata(path)
@@ -68,9 +66,7 @@ pub async fn probe_media(path: impl AsRef<Path>) -> Result<MediaProbe> {
         )
         .arg("-of")
         .arg("json")
-        // The downloaded file is untrusted. Without these restrictions ffprobe
-        // can recognize HLS/DASH playlists and perform a second network request,
-        // bypassing the downloader's CDN and DNS checks.
+        // No network: untrusted files must not trigger HLS/DASH fetches.
         .arg("-protocol_whitelist")
         .arg("file")
         .arg("-format_whitelist")
@@ -135,7 +131,7 @@ pub async fn probe_media(path: impl AsRef<Path>) -> Result<MediaProbe> {
 fn apply_ffprobe_resource_limits(command: &mut Command) {
     // SAFETY: the hook performs only async-signal-safe setrlimit syscalls and
     // constructs an errno-backed I/O error on failure. It runs in the child
-    // immediately before exec, so it cannot affect the Bot process itself.
+    // immediately before exec, so it cannot affect the parent process.
     unsafe {
         command.pre_exec(|| {
             #[cfg(target_os = "linux")]
@@ -355,8 +351,6 @@ fn parse_probe_json(json: &[u8]) -> Result<MediaProbe> {
 }
 
 fn visible_dimensions(stream: &ProbeStream, coded_width: u32, coded_height: u32) -> (u32, u32) {
-    // Keep the coded dimensions when optional metadata is malformed or would
-    // produce a non-positive / non-representable display size.
     let display_width = stream
         .sample_aspect_ratio
         .as_ref()
@@ -455,9 +449,7 @@ fn parse_display_matrix_rotation(value: &Value) -> Option<bool> {
         return None;
     }
 
-    // A display matrix may also scale or mirror a video, but its two axes must
-    // remain approximately orthogonal before it is safe to treat it as a pure
-    // orientation hint.
+    // Skip non-orthogonal matrices (scale/mirror, not pure rotation).
     let dot = a.mul_add(b, c * d).abs();
     if dot > first_norm * second_norm * 0.01 {
         return None;

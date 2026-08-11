@@ -471,15 +471,15 @@ fn build_post(
         .or_else(|| non_empty(parse_data.cover_url))
         .and_then(|raw| Url::parse(&raw).ok())
         .filter(is_allowed_media_url);
-    Ok(ResolvedPost {
-        platform: "wechat_channels".into(),
-        post_id: non_empty(export_id).unwrap_or(normalized.share_id),
-        canonical_url: normalized.canonical_url,
+    Ok(ResolvedPost::new_video(
+        "wechat_channels",
+        non_empty(export_id).unwrap_or(normalized.share_id),
+        normalized.canonical_url,
         title,
         cover_url,
         video,
         fallback_videos,
-    })
+    ))
 }
 
 fn push_candidate(
@@ -541,8 +541,6 @@ fn matching_candidate<'a>(
     direct: &MediaSource,
     candidates: &'a [MediaSource],
 ) -> Option<&'a MediaSource> {
-    // An exact URL is the strongest identity, but it is still ambiguous when
-    // the feed attaches different decode keys to the same byte location.
     if let Some(candidate) =
         unique_matching_candidate(candidates, |candidate| candidate.url == direct.url)
     {
@@ -702,7 +700,6 @@ fn map_status(status: StatusCode, yuanbao: bool) -> Result<()> {
 }
 
 fn map_network_error(error: &reqwest::Error) -> Error {
-    // Formatting reqwest::Error can include a signed URL or endpoint.
     map_network_error_msg(error, "上游请求超时", "无法连接上游服务")
 }
 

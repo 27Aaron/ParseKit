@@ -1,26 +1,20 @@
+use std::path::PathBuf;
+
 use url::Url;
 
 use crate::{
     Error, ResolvedPost, Result,
+    media::MediaDownloader,
     platforms::{self, DouyinResolver, Platform, WechatResolver},
 };
 
-/// Multi-platform parse facade.
-///
-/// Delivery apps (bots, CLI, …) depend on this type rather than individual
-/// platform resolvers so new platforms can be registered here without touching
-/// product code.
-///
-/// Platforms are tried in registration order (see [`ParseKitBuilder`]).
+/// Multi-platform facade; tries platforms in registration order.
 #[derive(Debug, Clone)]
 pub struct ParseKit {
     platforms: Vec<Platform>,
 }
 
-/// Builds a [`ParseKit`] with an explicit set of platforms.
-///
-/// Default match order when using [`ParseKit::new`] is WeChat Channels, then
-/// Douyin — the same order as [`platforms::STATELESS_EXTRACTORS`].
+/// Kit builder. [`ParseKit::new`] registers WeChat then Douyin.
 #[derive(Debug, Default)]
 pub struct ParseKitBuilder {
     platforms: Vec<Platform>,
@@ -31,27 +25,23 @@ impl ParseKitBuilder {
         Self::default()
     }
 
-    /// Register WeChat Channels (requires Yuanbao cookie).
     pub fn wechat(mut self, yuanbao_cookie: impl Into<String>) -> Result<Self> {
         self.platforms
             .push(Platform::Wechat(WechatResolver::new(yuanbao_cookie)?));
         Ok(self)
     }
 
-    /// Register Douyin (no cookie required for the public share-page path).
     pub fn douyin(mut self) -> Result<Self> {
         self.platforms
             .push(Platform::Douyin(DouyinResolver::new()?));
         Ok(self)
     }
 
-    /// Register an already-constructed platform backend.
     pub fn platform(mut self, platform: Platform) -> Self {
         self.platforms.push(platform);
         self
     }
 
-    /// Finish building. At least one platform must be registered.
     pub fn build(self) -> Result<ParseKit> {
         if self.platforms.is_empty() {
             return Err(Error::Config("至少注册一个解析平台".into()));
@@ -63,12 +53,7 @@ impl ParseKitBuilder {
 }
 
 impl ParseKit {
-    /// Build a kit with the platforms currently supported by this build.
-    ///
-    /// Registration order is match order for share text and URLs:
-    /// WeChat Channels, then Douyin (aligned with [`platforms::STATELESS_EXTRACTORS`]).
-    ///
-    /// For Douyin-only (or custom sets), use [`ParseKit::builder`].
+    /// WeChat + Douyin. Custom sets: [`ParseKit::builder`].
     pub fn new(wechat_yuanbao_cookie: impl Into<String>) -> Result<Self> {
         Self::builder()
             .wechat(wechat_yuanbao_cookie)?
@@ -76,15 +61,10 @@ impl ParseKit {
             .build()
     }
 
-    /// Start a custom platform registration (optional WeChat / Douyin / …).
     pub fn builder() -> ParseKitBuilder {
         ParseKitBuilder::new()
     }
 
-    /// Extract a supported share URL from free-form text, or reject early.
-    ///
-    /// Uses the same platform matcher order as a fully constructed kit, but
-    /// does not require cookies or network clients.
     pub fn extract_share_url(input: &str) -> Result<Url> {
         platforms::extract_share_url(input)
     }
@@ -111,19 +91,26 @@ impl ParseKit {
         Err(Error::UnsupportedUrl)
     }
 
-    /// Access the WeChat resolver when it was registered.
     pub fn wechat(&self) -> Option<&WechatResolver> {
         self.platforms.iter().find_map(Platform::as_wechat)
     }
 
-    /// Access the Douyin resolver when it was registered.
     pub fn douyin(&self) -> Option<&DouyinResolver> {
         self.platforms.iter().find_map(Platform::as_douyin)
     }
 
-    /// Registered platforms in match order (for tests / introspection).
     pub fn platforms(&self) -> &[Platform] {
         &self.platforms
+    }
+
+    /// Downloader allowlisted for `post.platform`.
+    pub fn media_downloader_for(
+        &self,
+        post: &ResolvedPost,
+        workspace_dir: impl Into<PathBuf>,
+        max_bytes: u64,
+    ) -> Result<MediaDownloader> {
+        MediaDownloader::for_platform(post.platform.as_str(), workspace_dir, max_bytes)
     }
 }
 
@@ -156,6 +143,41 @@ mod tests {
                 .map(Platform::platform_id)
                 .collect::<Vec<_>>(),
             ["wechat_channels", "douyin"]
+        );
+    }
+
+    #[test]
+    fn media_downloader_for_selects_platform_allowlist() {
+        use url::Url;
+
+        use crate::model::{MediaSource, MediaSourceKind, ResolvedPost, VideoCodec};
+
+        let kit = ParseKit::builder().douyin().unwrap().build().unwrap();
+        let post = ResolvedPost::new_video(
+            "douyin",
+            "1",
+            Url::parse("https://www.douyin.com/video/1").unwrap(),
+            None,
+            None,
+            MediaSource {
+                url: Url::parse("https://aweme.snssdk.com/play").unwrap(),
+                codec: VideoCodec::Unknown,
+                provenance: MediaSourceKind::Direct,
+                width: None,
+                height: None,
+                size_hint: None,
+                decode_key: None,
+            },
+            Vec::new(),
+        );
+        let downloader = kit
+            .media_downloader_for(&post, "/tmp/parse-kit-test", 1024)
+            .unwrap();
+        assert!(
+            downloader
+                .allowed_hosts()
+                .iter()
+                .any(|h| { h.contains("douyin") || h.contains("snssdk") || h.starts_with('.') })
         );
     }
 }
