@@ -44,7 +44,7 @@ pub enum Commands {
         /// Output directory; defaults to PARSE_KIT_OUTPUT_DIR or ./downloads.
         #[arg(short, long, env = "PARSE_KIT_OUTPUT_DIR")]
         output: Option<PathBuf>,
-        /// Maximum size in bytes; defaults to PARSE_KIT_MAX_BYTES or 200 MiB.
+        /// Optional size cap in bytes (unset = unlimited). Env: PARSE_KIT_MAX_BYTES.
         #[arg(long, env = "PARSE_KIT_MAX_BYTES")]
         max_bytes: Option<u64>,
         /// Order for automatic source selection.

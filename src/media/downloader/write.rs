@@ -141,7 +141,7 @@ pub(super) async fn open_private_file_append(path: PathBuf) -> Result<PendingFil
 pub(super) fn write_chunks<T: AsRef<[u8]>>(
     mut pending_file: PendingFile,
     receiver: &mut mpsc::Receiver<T>,
-    max_bytes: u64,
+    max_bytes: Option<u64>,
     mut progress_reporter: Option<ProgressReporter>,
     disk_write_budget: Arc<StdMutex<DiskWriteBudget>>,
     mut prefix_xor: Option<crate::platforms::wechat::PrefixXor>,
@@ -155,16 +155,19 @@ pub(super) fn write_chunks<T: AsRef<[u8]>>(
         if let Some(xor) = prefix_xor.as_mut() {
             xor.transform(&mut buffer);
         }
-        let next_bytes = bytes
-            .checked_add(buffer.len() as u64)
-            .ok_or(Error::MediaTooLarge {
-                actual: u64::MAX,
-                limit: max_bytes,
-            })?;
-        if next_bytes > max_bytes {
+        let next_bytes =
+            bytes
+                .checked_add(buffer.len() as u64)
+                .ok_or_else(|| Error::MediaTooLarge {
+                    actual: u64::MAX,
+                    limit: max_bytes.unwrap_or(u64::MAX),
+                })?;
+        if let Some(limit) = max_bytes
+            && next_bytes > limit
+        {
             return Err(Error::MediaTooLarge {
                 actual: next_bytes,
-                limit: max_bytes,
+                limit,
             });
         }
 

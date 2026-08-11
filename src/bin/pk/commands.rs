@@ -34,7 +34,8 @@ pub async fn download(
     let kit = build_kit()?;
     let post = kit.resolve_text(input).await?;
     let dir = output.unwrap_or_else(config::default_output_dir);
-    let limit = max_bytes.unwrap_or_else(config::default_max_bytes);
+    // CLI: no default size cap; optional --max-bytes / PARSE_KIT_MAX_BYTES only.
+    let limit = max_bytes.or_else(config::env_max_bytes);
     let downloader = kit.media_downloader_for(&post, &dir, limit)?;
 
     let multi_image = post.kind == ContentKind::ImageSet && source.is_none() && !first_only;

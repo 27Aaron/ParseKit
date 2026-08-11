@@ -49,7 +49,7 @@ async fn downloads_decrypts_and_probes_wechat_channels_sample() {
     let directory = TestDirectory::new();
     let downloader = MediaDownloader::with_options(
         directory.path(),
-        LIVE_DOWNLOAD_LIMIT_BYTES,
+        Some(LIVE_DOWNLOAD_LIMIT_BYTES),
         REVIEWED_WECHAT_MEDIA_HOSTS.iter().copied(),
         LIVE_DOWNLOAD_TIMEOUT,
         DownloadRequestIdentity::wechat_channels(),
