@@ -1,11 +1,13 @@
-//! inline spinner while work is in progress, green `✓` / red `✗` when done.
-//!
-//! Status lines use a fixed action column so output stays aligned:
+//! Interactive TTY mode streams status rows with a short spin→✓ reveal so the
+//! log feels smooth rather than dumping all at once:
 //!
 //! ```text
-//! ✓  Resolved       wechat · title…
-//! ✓  Saved          ./downloads/wechat_xxx.mp4 · 8.1MB
-//! ✓  Already saved  ./downloads/wechat_xxx.mp4 · 640.2MB
+//! ✓  platform       douyin
+//! ✓  post_id        7661…
+//! ✓  title          …
+//! ✓  kind           Video
+//! ✓  canonical      https://…
+//! ✓  source[0]      origin · unknown · key=no
 //! ```
 
 use std::{
@@ -27,38 +29,87 @@ const ICON_OK: &str = "✓";
 const ICON_ERR: &str = "✗";
 const FRAMES: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 
-/// Width of the action column (`Already saved` is the longest common verb).
-const ACTION_WIDTH: usize = 13;
+/// Width of the action / field column.
+pub const ACTION_WIDTH: usize = 13;
+
+const REVEAL_SPIN_FRAMES: usize = 3;
+const REVEAL_SPIN_MS: u64 = 22;
+const REVEAL_GAP_MS: u64 = 16;
 
 /// Human interactive mode: not JSON and stderr is a terminal.
 pub fn interactive(json: bool) -> bool {
     !json && io::stderr().is_terminal()
 }
 
-/// `✓  Resolved       wechat · title…`
+fn stdout_tty() -> bool {
+    io::stdout().is_terminal()
+}
+
+/// Immediate success line (no animation).
 pub fn ok(action: &str, detail: impl AsRef<str>) {
     println!(
         "{GREEN}{ICON_OK}{RESET}  {:<ACTION_WIDTH$}  {}",
         action,
         detail.as_ref()
     );
+    let _ = io::stdout().flush();
 }
 
-/// `✗  Failed         …`
+/// Immediate error line.
 pub fn err(action: &str, detail: impl AsRef<str>) {
     eprintln!(
         "{RED}{ICON_ERR}{RESET}  {:<ACTION_WIDTH$}  {}",
         action,
         detail.as_ref()
     );
+    let _ = io::stderr().flush();
 }
 
-/// Dim note without a strong status icon column.
+/// Dim continuation / note (aligned under the detail column).
 pub fn note(message: impl AsRef<str>) {
     eprintln!("{DIM}·{RESET}  {:<ACTION_WIDTH$}  {}", "", message.as_ref());
 }
 
-/// Aligned platform row: `✓  wechat      微信视频号    ·  needs cookie`
+/// Dim sub-line under a status row (e.g. long media URL).
+pub fn sub(detail: impl AsRef<str>) {
+    println!("{DIM}   {:<ACTION_WIDTH$}  {}{RESET}", "", detail.as_ref());
+    let _ = io::stdout().flush();
+}
+
+/// Stream a success row: brief cyan spin, then green ✓ (TTY only).
+pub async fn reveal_ok(action: &str, detail: impl AsRef<str>) {
+    let detail = detail.as_ref();
+    if !stdout_tty() {
+        ok(action, detail);
+        return;
+    }
+
+    for frame in FRAMES.iter().cycle().take(REVEAL_SPIN_FRAMES) {
+        print!("\r{CYAN}{frame}{RESET}  {action:<ACTION_WIDTH$}  {detail}   ");
+        let _ = io::stdout().flush();
+        tokio::time::sleep(Duration::from_millis(REVEAL_SPIN_MS)).await;
+    }
+    print!("\r\x1b[2K");
+    ok(action, detail);
+    tokio::time::sleep(Duration::from_millis(REVEAL_GAP_MS)).await;
+}
+
+/// Stream several success rows with the spin→✓ reveal.
+pub async fn reveal_ok_rows(rows: impl IntoIterator<Item = (String, String)>) {
+    for (action, detail) in rows {
+        reveal_ok(&action, detail).await;
+    }
+}
+
+/// Immediate dim sub-line after a reveal (no spin).
+pub async fn reveal_sub(detail: impl AsRef<str>) {
+    sub(detail);
+    if stdout_tty() {
+        tokio::time::sleep(Duration::from_millis(REVEAL_GAP_MS / 2)).await;
+    }
+}
+
+/// Aligned platform row for `platforms` / `doctor`.
 pub fn platform_row(id: &str, name: &str, note: &str) {
     let name_col: usize = 14;
     let pad = name_col.saturating_sub(display_width(name));
@@ -66,7 +117,6 @@ pub fn platform_row(id: &str, name: &str, note: &str) {
     println!("{GREEN}{ICON_OK}{RESET}  {id:<10}  {name_aligned}  ·  {DIM}{note}{RESET}");
 }
 
-/// Approximate terminal columns: CJK-ish code points count as 2.
 fn display_width(text: &str) -> usize {
     text.chars()
         .map(|ch| {
@@ -90,7 +140,7 @@ fn display_width(text: &str) -> usize {
         .sum()
 }
 
-/// Inline braille spinner on stderr (Mole-style). No-op when not interactive.
+/// Background spinner for long async work (resolve / download).
 pub struct Spinner {
     stop: Arc<AtomicBool>,
     message: Arc<Mutex<String>>,
@@ -118,8 +168,7 @@ impl Spinner {
             let mut frame = 0usize;
             while !flag.load(Ordering::Relaxed) {
                 let glyph = FRAMES[frame % FRAMES.len()];
-                let message = label.lock().map(|guard| guard.clone()).unwrap_or_default();
-                // Two spaces after glyph to match status-line gutter.
+                let message = label.lock().map(|g| g.clone()).unwrap_or_default();
                 eprint!("\r{CYAN}{glyph}{RESET}  {message}   ");
                 let _ = io::stderr().flush();
                 frame = frame.wrapping_add(1);
@@ -135,7 +184,6 @@ impl Spinner {
         }
     }
 
-    /// Cloneable handle for progress callbacks (must not outlive the spinner).
     pub fn label(&self) -> SpinnerLabel {
         SpinnerLabel {
             message: Arc::clone(&self.message),
@@ -155,13 +203,17 @@ impl Spinner {
         self.active = false;
     }
 
-    /// Clear spinner and print an aligned success line.
+    /// End long work with a streamed spin→✓ line on stdout.
     pub async fn finish_ok(mut self, action: &str, detail: impl AsRef<str>) {
         self.stop_and_clear().await;
-        ok(action, detail);
+        reveal_ok(action, detail).await;
     }
 
-    /// Clear spinner and print an aligned error line.
+    /// Stop the spinner without printing a status line (caller streams details next).
+    pub async fn finish_silent(mut self) {
+        self.stop_and_clear().await;
+    }
+
     pub async fn finish_err(mut self, action: &str, detail: impl AsRef<str>) {
         self.stop_and_clear().await;
         err(action, detail);
@@ -179,7 +231,6 @@ impl Drop for Spinner {
     }
 }
 
-/// Shared spinner text for progress callbacks.
 #[derive(Clone)]
 pub struct SpinnerLabel {
     message: Arc<Mutex<String>>,
@@ -209,7 +260,6 @@ pub fn format_bytes(bytes: u64) -> String {
     }
 }
 
-/// Spinner label: `Downloading…  42%  ·  12.3 MB / 29.1 MB`
 pub fn download_progress_label(percent: u8, downloaded: u64, total: u64) -> String {
     format!(
         "Downloading…  {percent:>3}%  ·  {} / {}",
@@ -218,7 +268,6 @@ pub fn download_progress_label(percent: u8, downloaded: u64, total: u64) -> Stri
     )
 }
 
-/// Collapse whitespace/newlines so status lines stay on one row.
 pub fn one_line(text: &str, max_chars: usize) -> String {
     let collapsed: String = text.split_whitespace().collect::<Vec<_>>().join(" ");
     if max_chars == 0 {

@@ -7,7 +7,7 @@ use parse_kit::{ContentKind, Result, wechat::WechatCredentialStatus};
 use crate::{
     args::Prefer,
     config::{self, build_kit},
-    output::{print_post_json, print_post_summary},
+    output::{print_post_json, print_post_summary, stream_post_summary},
     sources::{requested_source_index, select_sources},
     ui::{self, Spinner},
 };
@@ -31,20 +31,13 @@ pub async fn resolve(input: &str, json: bool) -> Result<()> {
     };
 
     if let Some(spinner) = spinner {
-        spinner
-            .finish_ok(
-                "Resolved",
-                format!(
-                    "{}  ·  {}",
-                    post.platform,
-                    ui::one_line(&post.display_title(), 72)
-                ),
-            )
-            .await;
+        spinner.finish_silent().await;
     }
 
     if json {
         print_post_json(&post)?;
+    } else if ui::interactive(json) {
+        stream_post_summary(&post).await;
     } else {
         print_post_summary(&post);
     }
@@ -78,16 +71,7 @@ pub async fn download(
         }
     };
     if let Some(spinner) = resolve_spin {
-        spinner
-            .finish_ok(
-                "Resolved",
-                format!(
-                    "{}  ·  {}",
-                    post.platform,
-                    ui::one_line(&post.display_title(), 72)
-                ),
-            )
-            .await;
+        spinner.finish_silent().await;
     }
 
     let dir = output.unwrap_or_else(config::default_output_dir);

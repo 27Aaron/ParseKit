@@ -4,40 +4,63 @@ use parse_kit::{Error, MediaSource, MediaSourceKind, ResolvedPost, Result, Video
 
 use crate::ui;
 
-const LABEL_WIDTH: usize = 10;
-
+/// Instant summary (non-TTY / scripts). Every field is a ✓ row.
 pub fn print_post_summary(post: &ResolvedPost) {
-    kv("platform", post.platform.to_string());
-    kv("post_id", &post.post_id);
-    kv("title", ui::one_line(&post.display_title(), 100));
-    kv("kind", format!("{:?}", post.kind));
-    kv("canonical", post.canonical_url.as_str());
-
-    println!("  {:LABEL_WIDTH$}", "sources");
+    for (action, detail) in summary_rows(post) {
+        ui::ok(&action, detail);
+    }
     for (index, source) in post.media_sources().enumerate() {
-        let mark = if index == 0 { "*" } else { " " };
-        println!(
-            "  {:LABEL_WIDTH$}  [{index}] {mark}  {:<8}  {:>10}  {:>8}  {:<8}  key={}",
-            "",
-            source_kind_label(source),
-            format_dims(source),
-            format_size(source),
-            format_codec(source.codec),
-            if source.decode_key.is_some() {
-                "yes"
-            } else {
-                "no"
-            },
+        ui::ok(
+            &format!("source[{index}]"),
+            source_detail(source, index == 0),
         );
-        println!("  {:LABEL_WIDTH$}      {}", "", source.url);
+        ui::sub(source.url.as_str());
     }
     if post.media_sources().count() > 1 {
-        kv("hint", "download --source N  or  --prefer smallest");
+        ui::ok("hint", "download --source N  or  --prefer smallest");
     }
 }
 
-fn kv(label: &str, value: impl AsRef<str>) {
-    println!("  {label:<LABEL_WIDTH$}  {}", value.as_ref());
+/// Streamed summary with spin→✓ reveal (interactive TTY).
+pub async fn stream_post_summary(post: &ResolvedPost) {
+    ui::reveal_ok_rows(summary_rows(post)).await;
+    for (index, source) in post.media_sources().enumerate() {
+        ui::reveal_ok(
+            &format!("source[{index}]"),
+            source_detail(source, index == 0),
+        )
+        .await;
+        ui::reveal_sub(source.url.as_str()).await;
+    }
+    if post.media_sources().count() > 1 {
+        ui::reveal_ok("hint", "download --source N  or  --prefer smallest").await;
+    }
+}
+
+fn summary_rows(post: &ResolvedPost) -> Vec<(String, String)> {
+    vec![
+        ("platform".into(), post.platform.to_string()),
+        ("post_id".into(), post.post_id.clone()),
+        ("title".into(), ui::one_line(&post.display_title(), 100)),
+        ("kind".into(), format!("{:?}", post.kind)),
+        ("canonical".into(), post.canonical_url.as_str().to_owned()),
+    ]
+}
+
+fn source_detail(source: &MediaSource, is_primary: bool) -> String {
+    let mark = if is_primary { "★" } else { "·" };
+    format!(
+        "{mark}  {:<8}  {:>10}  {:>8}  {:<8}  key={}",
+        source_kind_label(source),
+        format_dims(source),
+        format_size(source),
+        format_codec(source.codec),
+        if source.decode_key.is_some() {
+            "yes"
+        } else {
+            "no"
+        },
+    )
 }
 
 pub fn print_post_json(post: &ResolvedPost) -> Result<()> {
