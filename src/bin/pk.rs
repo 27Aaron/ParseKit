@@ -4,8 +4,7 @@ use std::{path::PathBuf, process::ExitCode};
 
 use clap::{Parser, Subcommand};
 use parse_kit::{
-    Error, ParseKit, ParseKitBuilder, ResolvedPost, Result, media::MediaDownloader,
-    platforms::util::display_title,
+    Error, ParseKit, ParseKitBuilder, ResolvedPost, Result, platforms::util::display_title,
 };
 
 const DEFAULT_MAX_BYTES: u64 = 200 * 1024 * 1024;
