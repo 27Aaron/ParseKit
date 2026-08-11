@@ -4,6 +4,11 @@ use serde::{Deserialize, Serialize};
 use url::Url;
 
 /// Reviewed WeChat Channels CDN hosts allowed for media download.
+///
+/// Pass these (or a platform-specific reviewed set) into
+/// [`crate::media::MediaDownloader::with_allowed_hosts`]. New CDN names must be
+/// reviewed before being added — broad suffixes like `*.qq.com` are intentionally
+/// not accepted.
 pub const REVIEWED_WECHAT_MEDIA_HOSTS: &[&str] = &[
     "finder.video.qq.com",
     "findermp.video.qq.com",
