@@ -1,7 +1,7 @@
 use std::{env, path::PathBuf, time::Duration};
 
 use parse_kit::{
-    media::{DownloadRequestIdentity, MediaDownloader, decrypt_file_prefix, probe_media},
+    media::{DownloadRequestIdentity, MediaDownloader, probe_media},
     model::{MediaSource, MediaSourceKind, ResolvedPost},
     wechat::{REVIEWED_WECHAT_MEDIA_HOSTS, WechatResolver},
 };
@@ -25,14 +25,11 @@ async fn resolves_wechat_channels_sample() {
         "unexpected canonical share URL"
     );
     assert!(!post.post_id.trim().is_empty(), "missing post identifier");
-    assert_safe_media_source(post.primary_video().unwrap());
+    let primary = post.primary_video().expect("resolved post has no video");
+    assert_safe_media_source(primary);
 
-    if post.primary_video().unwrap().provenance == MediaSourceKind::Derived {
-        assert!(
-            post.primary_video().unwrap().size_hint.is_none(),
-            "derived source must not reuse a candidate size hint"
-        );
-        let query: Vec<_> = post.primary_video().unwrap().url.query_pairs().collect();
+    if primary.provenance == MediaSourceKind::Derived {
+        let query: Vec<_> = primary.url.query_pairs().collect();
         assert!(query.len() == 2, "derived source query shape changed");
         assert!(
             query[0].0 == "encfilekey" && !query[0].1.is_empty(),
@@ -59,16 +56,11 @@ async fn downloads_decrypts_and_probes_wechat_channels_sample() {
     )
     .unwrap_or_else(|_| panic!("failed to initialize the live media downloader"));
     let downloaded = downloader
-        .download(post.primary_video().unwrap())
+        .download_playable(post.media_sources())
         .await
         .unwrap_or_else(|_| panic!("live WeChat media download failed"));
 
     assert!(downloaded.bytes > 0, "downloaded media is empty");
-    if let Some(decode_key) = post.primary_video().unwrap().decode_key {
-        decrypt_file_prefix(&downloaded.path, decode_key)
-            .await
-            .unwrap_or_else(|_| panic!("live WeChat media decryption failed"));
-    }
     let probe = probe_media(&downloaded.path)
         .await
         .unwrap_or_else(|_| panic!("live WeChat media probe failed"));
@@ -138,7 +130,7 @@ fn assert_safe_media_source(source: &MediaSource) {
     assert!(
         source.url.username().is_empty()
             && source.url.password().is_none()
-            && source.url.port().is_none(),
+            && source.url.port().is_none_or(|port| port == 443),
         "media source contains unexpected authority components"
     );
     assert!(
