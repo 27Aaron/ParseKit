@@ -221,28 +221,36 @@ impl MediaDownloader {
     }
 
     pub async fn download(&self, source: &MediaSource) -> Result<DownloadedMedia> {
-        self.download_url_with_callback(&source.url, source.size_hint, None)
+        self.download_url_with_callback(&source.url, source.size_hint, None, None)
             .await
     }
 
     pub async fn download_url(&self, url: &Url) -> Result<DownloadedMedia> {
-        self.download_url_with_callback(url, None, None).await
+        self.download_url_with_callback(url, None, None, None).await
     }
 
-    /// Try each source in order; decrypt with that source's `decode_key` when set.
-    /// On decrypt failure, remove the temp file and continue.
+    /// Try each source in order. When `decode_key` is set, XOR the first 128 KiB
+    /// while writing; wrong key fails BMFF check and the next source is tried.
     pub async fn download_playable<'a, I>(&self, sources: I) -> Result<DownloadedMedia>
     where
         I: IntoIterator<Item = &'a MediaSource>,
     {
         let mut last_error = None;
         for source in sources {
-            match self.download(source).await {
+            match self
+                .download_url_with_callback(&source.url, source.size_hint, None, source.decode_key)
+                .await
+            {
                 Ok(media) => {
-                    if let Some(key) = source.decode_key {
-                        match crate::platforms::wechat::decrypt_file_prefix(&media.path, key).await
-                        {
-                            Ok(_) => return Ok(media),
+                    if source.decode_key.is_some() {
+                        match crate::platforms::wechat::prefix_looks_like_bmff(&media.path).await {
+                            Ok(true) => return Ok(media),
+                            Ok(false) => {
+                                let _ = media.cleanup().await;
+                                last_error = Some(Error::InvalidMedia(
+                                    "decodeKey 与媒体不匹配，解密后没有有效 BMFF 文件头".into(),
+                                ));
+                            }
                             Err(error) => {
                                 let _ = media.cleanup().await;
                                 last_error = Some(error);
@@ -267,8 +275,13 @@ impl MediaDownloader {
     where
         F: Fn(DownloadProgress) + Send + Sync + 'static,
     {
-        self.download_url_with_callback(&source.url, source.size_hint, Some(Arc::new(on_progress)))
-            .await
+        self.download_url_with_callback(
+            &source.url,
+            source.size_hint,
+            Some(Arc::new(on_progress)),
+            None,
+        )
+        .await
     }
 
     async fn download_url_with_callback(
@@ -276,11 +289,19 @@ impl MediaDownloader {
         url: &Url,
         size_hint: Option<u64>,
         progress_callback: Option<ProgressCallback>,
+        decode_key: Option<u64>,
     ) -> Result<DownloadedMedia> {
         timeout(
             self.request_timeout,
             retry_transient_downloads(
-                || self.download_url_within_deadline(url, size_hint, progress_callback.clone()),
+                || {
+                    self.download_url_within_deadline(
+                        url,
+                        size_hint,
+                        progress_callback.clone(),
+                        decode_key,
+                    )
+                },
                 &DOWNLOAD_RETRY_DELAYS,
             ),
         )
@@ -293,6 +314,7 @@ impl MediaDownloader {
         url: &Url,
         size_hint: Option<u64>,
         progress_callback: Option<ProgressCallback>,
+        decode_key: Option<u64>,
     ) -> Result<DownloadedMedia> {
         if let Some(actual) = size_hint.filter(|size| *size > self.max_bytes) {
             return Err(Error::MediaTooLarge {
@@ -313,7 +335,7 @@ impl MediaDownloader {
             });
         }
 
-        self.stream_response(response, content_length, progress_callback)
+        self.stream_response(response, content_length, progress_callback, decode_key)
             .await
     }
 
@@ -382,6 +404,7 @@ impl MediaDownloader {
         mut response: Response,
         content_length: Option<u64>,
         progress_callback: Option<ProgressCallback>,
+        decode_key: Option<u64>,
     ) -> Result<DownloadedMedia> {
         tokio::fs::create_dir_all(self.workspace_dir.as_path())
             .await
@@ -393,6 +416,7 @@ impl MediaDownloader {
         let disk_write_budget = Arc::clone(&self.disk_write_budget);
         let (progress_reporter, _progress_guard) =
             ProgressReporter::new(content_length, progress_callback);
+        let prefix_xor = decode_key.map(crate::platforms::wechat::PrefixXor::new);
 
         let writer = tokio::task::spawn_blocking(move || -> Result<WrittenMedia> {
             write_chunks(
@@ -401,6 +425,7 @@ impl MediaDownloader {
                 writer_limit,
                 progress_reporter,
                 disk_write_budget,
+                prefix_xor,
             )
         });
 
@@ -764,14 +789,18 @@ fn write_chunks<T: AsRef<[u8]>>(
     max_bytes: u64,
     mut progress_reporter: Option<ProgressReporter>,
     disk_write_budget: Arc<StdMutex<DiskWriteBudget>>,
+    mut prefix_xor: Option<crate::platforms::wechat::PrefixXor>,
 ) -> Result<WrittenMedia> {
     let mut bytes = 0_u64;
     let mut checked_disk_space = false;
 
     while let Some(chunk) = receiver.blocking_recv() {
-        let chunk = chunk.as_ref();
+        let mut buffer = chunk.as_ref().to_vec();
+        if let Some(xor) = prefix_xor.as_mut() {
+            xor.transform(&mut buffer);
+        }
         let next_bytes = bytes
-            .checked_add(chunk.len() as u64)
+            .checked_add(buffer.len() as u64)
             .ok_or(Error::MediaTooLarge {
                 actual: u64::MAX,
                 limit: max_bytes,
@@ -783,7 +812,7 @@ fn write_chunks<T: AsRef<[u8]>>(
             });
         }
 
-        let chunk_bytes = chunk.len() as u64;
+        let chunk_bytes = buffer.len() as u64;
         let mut disk_budget = disk_write_budget
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -802,7 +831,7 @@ fn write_chunks<T: AsRef<[u8]>>(
             disk_budget.unchecked_bytes = 0;
             checked_disk_space = true;
         }
-        pending_file.file_mut()?.write_all(chunk)?;
+        pending_file.file_mut()?.write_all(&buffer)?;
         disk_budget.unchecked_bytes = if chunk_bytes >= DISK_CHECK_INTERVAL_BYTES {
             0
         } else {
@@ -1380,8 +1409,15 @@ mod tests {
         drop(sender);
 
         let disk_write_budget = Arc::new(StdMutex::new(DiskWriteBudget::default()));
-        let mut outcome =
-            write_chunks(pending_file, &mut receiver, 8, reporter, disk_write_budget).unwrap();
+        let mut outcome = write_chunks(
+            pending_file,
+            &mut receiver,
+            8,
+            reporter,
+            disk_write_budget,
+            None,
+        )
+        .unwrap();
         assert_eq!(
             std::fs::read(&outcome.media.path).unwrap(),
             (1_u8..=8).collect::<Vec<_>>()

@@ -441,7 +441,8 @@ fn build_post(
                 provenance: MediaSourceKind::Derived,
                 width: candidate.width,
                 height: candidate.height,
-                size_hint: None,
+                // Keep size from the feed candidate for quality ranking.
+                size_hint: candidate.size_hint,
                 decode_key: candidate.decode_key,
             };
             if !derived_sources
@@ -452,12 +453,14 @@ fn build_post(
             }
         }
     }
+    sort_sources_by_quality(&mut derived_sources);
 
     let (video, fallback_videos) = if let Some(direct_source) = direct_source {
-        let fallback_videos = derived_sources
+        let mut fallback_videos = derived_sources
             .into_iter()
             .filter(|source| !sources_are_equivalent(source, &direct_source))
-            .collect();
+            .collect::<Vec<_>>();
+        sort_sources_by_quality(&mut fallback_videos);
         (direct_source, fallback_videos)
     } else {
         if derived_sources.is_empty() {
@@ -563,6 +566,23 @@ fn matching_candidate<'a>(
 
 fn sources_are_equivalent(left: &MediaSource, right: &MediaSource) -> bool {
     left.url == right.url && left.decode_key == right.decode_key
+}
+
+/// Prefer larger resolution / size; H264 over H265 over unknown.
+fn quality_key(source: &MediaSource) -> (u64, u64, u8) {
+    let pixels =
+        u64::from(source.width.unwrap_or(0)).saturating_mul(u64::from(source.height.unwrap_or(0)));
+    let size = source.size_hint.unwrap_or(0);
+    let codec = match source.codec {
+        VideoCodec::H264 => 2,
+        VideoCodec::H265 => 1,
+        VideoCodec::Unknown => 0,
+    };
+    (pixels, size, codec)
+}
+
+fn sort_sources_by_quality(sources: &mut [MediaSource]) {
+    sources.sort_by_key(|source| std::cmp::Reverse(quality_key(source)));
 }
 
 /// Whether it is safe to copy `source.decode_key` onto `target`.
@@ -937,7 +957,7 @@ mod tests {
         assert_eq!(post.video.provenance, MediaSourceKind::Derived);
         assert_eq!(post.video.codec, VideoCodec::H264);
         assert_eq!(post.video.url.query(), Some("encfilekey=h&token=t"));
-        assert_eq!(post.video.size_hint, None);
+        assert_eq!(post.video.size_hint, Some(123456));
         assert_eq!(
             post.fallback_videos
                 .iter()
@@ -1148,6 +1168,41 @@ mod tests {
                 .iter()
                 .all(|source| source.url == post.video.url)
         );
+    }
+
+    #[test]
+    fn prefers_higher_resolution_and_size_among_fallbacks() {
+        let normalized = NormalizedShareUrl {
+            share_id: "A27pGwf5f9".to_owned(),
+            canonical_url: Url::parse("https://weixin.qq.com/sph/A27pGwf5f9").unwrap(),
+        };
+        let parse_data = ParseData {
+            wx_export_id: String::new(),
+            cover_url: String::new(),
+            desc: String::new(),
+            playable_url: "https://example.invalid/?token=dummy".to_owned(),
+        };
+        let feed = serde_json::json!({
+            "feedInfo": {
+                "h264VideoInfo": {
+                    "videoUrl": "https://finder.video.qq.com/small.mp4?encfilekey=s&token=t",
+                    "width": 720,
+                    "height": 1280,
+                    "fileSize": 1_000_000
+                },
+                "h265VideoInfo": {
+                    "videoUrl": "https://finder.video.qq.com/large.mp4?encfilekey=l&token=t",
+                    "width": 1080,
+                    "height": 1920,
+                    "fileSize": 5_000_000
+                }
+            }
+        });
+
+        let post = build_post(normalized, parse_data, feed, "export-id".to_owned()).unwrap();
+        assert_eq!(post.video.codec, VideoCodec::H265);
+        assert_eq!(post.video.width, Some(1080));
+        assert_eq!(post.fallback_videos[0].codec, VideoCodec::H264);
     }
 
     #[test]
