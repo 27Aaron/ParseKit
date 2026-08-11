@@ -68,4 +68,19 @@ pub enum Commands {
     },
     /// Check local credentials and registered platforms.
     Doctor,
+    /// Bilibili account helpers (cookie / QR login).
+    Bilibili {
+        #[command(subcommand)]
+        command: BilibiliCmd,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+pub enum BilibiliCmd {
+    /// Scan a QR code with the Bilibili app; save cookie to `.env.local`.
+    Login,
+    /// Remove `BILIBILI_COOKIE` from `.env.local` and the current process.
+    Logout,
+    /// Show whether a Bilibili cookie is loaded (local shape only).
+    Status,
 }

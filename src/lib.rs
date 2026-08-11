@@ -2,6 +2,7 @@
 //!
 //! Use [`ParseKit`] as the facade or access individual [`platforms`] resolvers.
 
+pub mod auth;
 pub mod error;
 pub mod hub;
 pub mod media;
@@ -21,6 +22,10 @@ pub mod bilibili {
     pub use crate::platforms::bilibili::*;
 }
 
+pub use auth::{
+    CookieCredential, CredentialStatus, cookie_value, query_string_to_cookie_header,
+    remove_dotenv_var, upsert_dotenv_var,
+};
 pub use error::{Error, Result};
 pub use hub::{ParseKit, ParseKitBuilder};
 pub use model::{

@@ -4,6 +4,7 @@ mod args;
 mod commands;
 mod config;
 mod output;
+mod select;
 mod sources;
 mod ui;
 
@@ -11,7 +12,7 @@ use std::process::ExitCode;
 
 use clap::Parser;
 
-use self::args::{Cli, Commands};
+use self::args::{BilibiliCmd, Cli, Commands};
 
 fn main() -> ExitCode {
     config::load_dotenv();
@@ -43,6 +44,11 @@ fn main() -> ExitCode {
             } => commands::download(&input, output, prefer, source, first_only, force, json).await,
             Commands::Platforms { check } => commands::platforms(check),
             Commands::Doctor => commands::doctor(),
+            Commands::Bilibili { command } => match command {
+                BilibiliCmd::Login => commands::bilibili_login().await,
+                BilibiliCmd::Logout => commands::bilibili_logout(),
+                BilibiliCmd::Status => commands::bilibili_status(),
+            },
         }
     });
 

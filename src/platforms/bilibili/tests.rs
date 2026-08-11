@@ -1,10 +1,10 @@
 //! Tests for the Bilibili resolver.
 
 use super::{
-    extract_share_url,
+    BilibiliResolver, extract_share_url,
     parse::{build_post_from_payloads, collect_play_sources},
 };
-use crate::{Error, PlatformId};
+use crate::{CredentialStatus, Error, PlatformId};
 
 #[test]
 fn extracts_bv_and_av_urls() {
@@ -47,15 +47,19 @@ fn collects_dash_video_by_bandwidth() {
         "dash": {
             "video": [
                 {
+                    "id": 16,
                     "bandwidth": 500_000,
                     "width": 640,
                     "height": 360,
+                    "codecs": "avc1.64001E",
                     "base_url": "https://upos-sz-mirrorcos.bilivideo.com/low.m4s"
                 },
                 {
+                    "id": 80,
                     "bandwidth": 2_000_000,
                     "width": 1920,
                     "height": 1080,
+                    "codecs": "hev1.1.6.L150.90",
                     "baseUrl": "https://upos-sz-mirrorhw.bilivideo.com/high.m4s",
                     "backup_url": ["https://upos-sz-mirrorali.bilivideo.com/high-b.m4s"]
                 }
@@ -63,9 +67,11 @@ fn collects_dash_video_by_bandwidth() {
         }
     });
     let sources = collect_play_sources(&play);
-    assert!(sources.len() >= 2);
+    // Primary URLs only (backups omitted to keep the picker small).
+    assert_eq!(sources.len(), 2);
     assert!(sources[0].url.as_str().contains("high"));
     assert_eq!(sources[0].width, Some(1920));
+    assert_eq!(sources[0].label.as_deref(), Some("1080P/HEVC"));
 }
 
 #[test]
@@ -77,6 +83,20 @@ fn rejects_lookalike_media_hosts() {
         }]
     });
     assert!(collect_play_sources(&play).is_empty());
+}
+
+#[test]
+fn credential_status_detects_sessdata() {
+    let anon = BilibiliResolver::new().unwrap();
+    assert_eq!(anon.credential_status(), CredentialStatus::Absent);
+    assert!(!anon.is_authenticated());
+
+    let ok = BilibiliResolver::with_cookie("SESSDATA=abc; bili_jct=x").unwrap();
+    assert_eq!(ok.credential_status(), CredentialStatus::Present);
+    assert!(ok.is_authenticated());
+
+    let incomplete = BilibiliResolver::with_cookie("DedeUserID=1; foo=bar").unwrap();
+    assert_eq!(incomplete.credential_status(), CredentialStatus::Incomplete);
 }
 
 #[test]

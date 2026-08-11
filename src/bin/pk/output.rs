@@ -12,11 +12,7 @@ pub fn print_post_summary(post: &ResolvedPost) {
     let total = post.media_sources().count();
     ui::ok("sources", format!("{total} 路（[0] 默认最高）"));
     for (index, source) in post.media_sources().enumerate() {
-        let mark = if index == 0 { "★" } else { "·" };
-        ui::ok(
-            &format!("source[{index}]"),
-            format!("{mark}  {}", source.quality_summary()),
-        );
+        ui::ok(&format!("source[{index}]"), source.quality_summary());
         ui::sub(source.url.as_str());
     }
     if total > 1 {
@@ -26,21 +22,21 @@ pub fn print_post_summary(post: &ResolvedPost) {
 
 /// Streamed summary with spin→✓ reveal (interactive TTY).
 pub async fn stream_post_summary(post: &ResolvedPost) {
-    ui::reveal_ok_rows(summary_rows(post)).await;
-    let total = post.media_sources().count();
-    ui::reveal_ok("sources", format!("{total} 路（[0] 默认最高）")).await;
+    stream_post_header(post).await;
     for (index, source) in post.media_sources().enumerate() {
-        let mark = if index == 0 { "★" } else { "·" };
-        ui::reveal_ok(
-            &format!("source[{index}]"),
-            format!("{mark}  {}", source.quality_summary()),
-        )
-        .await;
+        ui::reveal_ok(&format!("source[{index}]"), source.quality_summary()).await;
         ui::reveal_sub(source.url.as_str()).await;
     }
-    if total > 1 {
+    if post.media_sources().count() > 1 {
         ui::reveal_ok("hint", "download --source N  or  --prefer smallest").await;
     }
+}
+
+/// Compact header for download flow (picker shows source rows next).
+pub async fn stream_post_header(post: &ResolvedPost) {
+    ui::reveal_ok_rows(summary_rows(post)).await;
+    let total = post.media_sources().count();
+    ui::reveal_ok("sources", format!("{total} 路可选")).await;
 }
 
 fn summary_rows(post: &ResolvedPost) -> Vec<(String, String)> {
