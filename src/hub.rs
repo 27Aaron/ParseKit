@@ -134,10 +134,7 @@ impl ParseKit {
         &self.platforms
     }
 
-    /// Creates a downloader restricted to the resolved post's platform hosts.
-    ///
-    /// File names use `{file_tag}_{canonical_slug}.{ext}` (e.g.
-    /// `wechat_sph_ArPbCgE03d.mp4`) so the path maps back to the share link.
+    /// Creates a downloader for the post's platform hosts and file stem.
     pub fn media_downloader_for(
         &self,
         post: &ResolvedPost,
@@ -177,7 +174,7 @@ mod tests {
                 .map(Platform::platform_id)
                 .collect::<Vec<_>>(),
             [
-                crate::PlatformId::WechatChannels,
+                crate::PlatformId::Wechat,
                 crate::PlatformId::Douyin,
                 crate::PlatformId::Bilibili,
             ]
@@ -193,8 +190,8 @@ mod tests {
         let kit = ParseKit::builder().douyin().unwrap().build().unwrap();
         let post = ResolvedPost::new_video(
             crate::PlatformId::Douyin,
-            "1",
-            Url::parse("https://www.douyin.com/video/1").unwrap(),
+            "7661946724177829115",
+            Url::parse("https://www.douyin.com/video/7661946724177829115").unwrap(),
             None,
             None,
             MediaSource {
@@ -217,14 +214,17 @@ mod tests {
                 .iter()
                 .any(|h| { h.contains("douyin") || h.contains("snssdk") || h.starts_with('.') })
         );
-        assert_eq!(downloader.file_stem(), Some("douyin_1"));
+        assert_eq!(
+            downloader.file_stem(),
+            Some("douyin_7661946724177829115")
+        );
     }
 
     #[test]
     fn matching_platform_routes_using_registered_resolvers() {
         let kit = ParseKit::builder().bilibili().unwrap().build().unwrap();
         let platform = kit
-            .matching_platform("看看 http://m.bilibili.com/video/av170001?utm_source=chat")
+            .matching_platform("看看 https://www.bilibili.com/video/BV1GJ411x7h7?utm_source=chat")
             .expect("Bilibili match");
 
         assert_eq!(platform.platform_id(), crate::PlatformId::Bilibili);

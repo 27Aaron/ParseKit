@@ -311,7 +311,7 @@ impl WechatResolver {
 
 impl PlatformResolver for WechatResolver {
     fn platform_id(&self) -> PlatformId {
-        PlatformId::WechatChannels
+        PlatformId::Wechat
     }
 
     fn extract_share_url(&self, input: &str) -> Result<Url> {

@@ -27,20 +27,20 @@ mod tests {
     #[test]
     fn trims_common_chat_punctuation() {
         assert_eq!(
-            trim_url_candidate("https://v.douyin.com/abc/。"),
-            "https://v.douyin.com/abc/"
+            trim_url_candidate("https://v.douyin.com/q75E3VmAe6A/。"),
+            "https://v.douyin.com/q75E3VmAe6A/"
         );
         assert_eq!(
-            trim_url_candidate("https://weixin.qq.com/sph/x】"),
-            "https://weixin.qq.com/sph/x"
+            trim_url_candidate("https://weixin.qq.com/sph/AzJ7CGPYWD】"),
+            "https://weixin.qq.com/sph/AzJ7CGPYWD"
         );
     }
 
     #[test]
     fn finds_first_https_url_in_share_text() {
         assert_eq!(
-            first_https_url("看看 https://b23.tv/abcd 这个"),
-            Some("https://b23.tv/abcd")
+            first_https_url("看看 https://www.bilibili.com/video/BV1GJ411x7h7 这个"),
+            Some("https://www.bilibili.com/video/BV1GJ411x7h7")
         );
         assert_eq!(first_https_url("no link here"), None);
     }

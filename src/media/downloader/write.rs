@@ -18,11 +18,6 @@ use super::{DiskWriteBudget, DownloadedMedia};
 pub(super) const MIN_FREE_DISK_BYTES: u64 = 512 * 1024 * 1024;
 const DISK_CHECK_INTERVAL_BYTES: u64 = 16 * 1024 * 1024;
 
-/// Destination path for a media download.
-///
-/// When `file_stem` is set (e.g. `wechat_sph_ArPbCgE03d`), names are
-/// `{stem}.{ext}` or `{stem}_{n}.{ext}` for multi-file posts. Otherwise a
-/// random UUID is used (anonymous `download_url` without post context).
 pub(super) fn media_task_path(
     directory: &Path,
     url: &url::Url,
@@ -41,11 +36,6 @@ pub(super) fn media_task_path(
         _ => format!("{}.{ext}", Uuid::new_v4().hyphenated()),
     };
     directory.join(name)
-}
-
-/// UUID-based path used when no post-derived stem is configured.
-pub(super) fn random_task_path(directory: &Path, url: &url::Url) -> PathBuf {
-    media_task_path(directory, url, None, 0)
 }
 
 /// Infers a safe extension from the URL path, falling back to `bin`.

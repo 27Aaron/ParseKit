@@ -110,7 +110,7 @@ pub fn platforms(check: bool) -> Result<()> {
         );
     }
     if kit.wechat().is_none() {
-        eprintln!("note: set YUANBAO_COOKIE to enable wechat_channels");
+        eprintln!("note: set YUANBAO_COOKIE to enable wechat");
     }
     if check {
         print_health(&kit);

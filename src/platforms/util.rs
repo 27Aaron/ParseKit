@@ -64,7 +64,7 @@ mod tests {
             "标题"
         );
         assert_eq!(
-            display_title_for_post(PlatformId::WechatChannels, None),
+            display_title_for_post(PlatformId::Wechat, None),
             "微信视频号视频"
         );
         assert_eq!(

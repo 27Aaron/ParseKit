@@ -15,11 +15,10 @@ pub(crate) fn format_title(title: Option<&str>, fallback: &str) -> String {
         .collect()
 }
 
-/// Stable platform identifier serialized with public string tags.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum PlatformId {
-    #[serde(rename = "wechat_channels")]
-    WechatChannels,
+    #[serde(rename = "wechat")]
+    Wechat,
     #[serde(rename = "douyin")]
     Douyin,
     #[serde(rename = "bilibili")]
@@ -29,19 +28,7 @@ pub enum PlatformId {
 impl PlatformId {
     pub const fn as_str(self) -> &'static str {
         match self {
-            Self::WechatChannels => "wechat_channels",
-            Self::Douyin => "douyin",
-            Self::Bilibili => "bilibili",
-        }
-    }
-
-    /// Short tag used in download filenames (not the public API id).
-    ///
-    /// WeChat Channels uses `wechat_sph` (share path `/sph/…`) instead of the
-    /// longer serialized id `wechat_channels`.
-    pub const fn file_tag(self) -> &'static str {
-        match self {
-            Self::WechatChannels => "wechat_sph",
+            Self::Wechat => "wechat",
             Self::Douyin => "douyin",
             Self::Bilibili => "bilibili",
         }
@@ -49,7 +36,7 @@ impl PlatformId {
 
     pub const fn display_name(self) -> &'static str {
         match self {
-            Self::WechatChannels => "微信视频号",
+            Self::Wechat => "微信视频号",
             Self::Douyin => "抖音",
             Self::Bilibili => "哔哩哔哩",
         }
@@ -57,7 +44,7 @@ impl PlatformId {
 
     pub const fn default_title(self) -> &'static str {
         match self {
-            Self::WechatChannels => "微信视频号视频",
+            Self::Wechat => "微信视频号视频",
             Self::Douyin => "抖音视频",
             Self::Bilibili => "哔哩哔哩视频",
         }
@@ -65,7 +52,7 @@ impl PlatformId {
 
     pub fn parse(raw: &str) -> Option<Self> {
         match raw {
-            "wechat_channels" => Some(Self::WechatChannels),
+            "wechat" => Some(Self::Wechat),
             "douyin" => Some(Self::Douyin),
             "bilibili" => Some(Self::Bilibili),
             _ => None,
@@ -299,20 +286,12 @@ impl ResolvedPost {
         format_title(self.title.as_deref(), fallback)
     }
 
-    /// Stable download basename (no extension): `{file_tag}_{canonical_slug}`.
-    ///
-    /// The slug is the last non-empty path segment of [`Self::canonical_url`]
-    /// (e.g. `ArPbCgE03d` from `https://weixin.qq.com/sph/ArPbCgE03d`), so the
-    /// name stays short and maps back to the share link. Falls back to a
-    /// sanitized [`Self::post_id`] when the URL has no usable path segment.
-    ///
-    /// WeChat Channels uses the short tag `wechat_sph` (not `wechat_channels`).
+    /// `{platform}_{canonical_path_slug}` without extension.
     pub fn download_file_stem(&self) -> String {
         download_file_stem(self.platform, &self.canonical_url, &self.post_id)
     }
 }
 
-/// Builds `{file_tag}_{slug}` for download filenames.
 pub fn download_file_stem(platform: PlatformId, canonical_url: &Url, post_id: &str) -> String {
     let from_canonical = canonical_url
         .path_segments()
@@ -331,10 +310,9 @@ pub fn download_file_stem(platform: PlatformId, canonical_url: &Url, post_id: &s
     } else {
         slug
     };
-    format!("{}_{slug}", platform.file_tag())
+    format!("{}_{slug}", platform.as_str())
 }
 
-/// Keeps only characters that are safe and portable in a single path component.
 pub(crate) fn sanitize_filename_component(raw: &str) -> String {
     let mut out = String::with_capacity(raw.len().min(120));
     for ch in raw.chars().take(120) {
@@ -375,31 +353,31 @@ mod tests {
     #[test]
     fn download_file_stem_uses_platform_and_canonical_path_slug() {
         let post = ResolvedPost::new_video(
-            PlatformId::WechatChannels,
+            PlatformId::Wechat,
             "export/UzFfBgAAxN6nSDBBUACfjMzT4DCgIrzfaAMsA2Z5MZdjdIWLCi-NdGBi-Q",
-            Url::parse("https://weixin.qq.com/sph/ArPbCgE03d").unwrap(),
+            Url::parse("https://weixin.qq.com/sph/AzJ7CGPYWD").unwrap(),
             Some("免费领强力道具！零氪也能当大佬！".into()),
             None,
             sample_source("v.mp4"),
             Vec::new(),
         );
-        assert_eq!(post.download_file_stem(), "wechat_sph_ArPbCgE03d");
+        assert_eq!(post.download_file_stem(), "wechat_AzJ7CGPYWD");
 
         assert_eq!(
             download_file_stem(
                 PlatformId::Douyin,
-                &Url::parse("https://www.douyin.com/video/7123456789012345678").unwrap(),
-                "7123456789012345678",
+                &Url::parse("https://www.douyin.com/video/7661946724177829115").unwrap(),
+                "7661946724177829115",
             ),
-            "douyin_7123456789012345678"
+            "douyin_7661946724177829115"
         );
         assert_eq!(
             download_file_stem(
                 PlatformId::Bilibili,
-                &Url::parse("https://www.bilibili.com/video/BV1xx411c7mD").unwrap(),
+                &Url::parse("https://www.bilibili.com/video/BV1GJ411x7h7").unwrap(),
                 "170001",
             ),
-            "bilibili_BV1xx411c7mD"
+            "bilibili_BV1GJ411x7h7"
         );
     }
 
@@ -418,8 +396,8 @@ mod tests {
         let fallback = sample_source("b.mp4");
         let post = ResolvedPost::new_video(
             PlatformId::Douyin,
-            "1",
-            Url::parse("https://www.douyin.com/video/1").unwrap(),
+            "7661946724177829115",
+            Url::parse("https://www.douyin.com/video/7661946724177829115").unwrap(),
             Some("t".into()),
             None,
             primary.clone(),
@@ -444,8 +422,8 @@ mod tests {
     fn image_sets_require_at_least_one_source() {
         let result = ResolvedPost::new_image_set(
             PlatformId::Douyin,
-            "1",
-            Url::parse("https://www.douyin.com/note/1").unwrap(),
+            "7661946724177829115",
+            Url::parse("https://www.douyin.com/note/7661946724177829115").unwrap(),
             None,
             None,
             Vec::new(),
@@ -457,8 +435,8 @@ mod tests {
     fn display_title_uses_platform_default_and_unicode_safe_limit() {
         let mut post = ResolvedPost::new_video(
             PlatformId::Bilibili,
-            "1",
-            Url::parse("https://www.bilibili.com/video/BV1234").unwrap(),
+            "BV1GJ411x7h7",
+            Url::parse("https://www.bilibili.com/video/BV1GJ411x7h7").unwrap(),
             Some("  ".into()),
             None,
             sample_source("a.mp4"),

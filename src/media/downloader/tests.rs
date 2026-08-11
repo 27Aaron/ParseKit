@@ -18,7 +18,7 @@ use super::http::check_response_status;
 use super::ssrf::{is_forbidden_ip, normalize_allowed_hosts, validate_media_url};
 use super::write::{
     MIN_FREE_DISK_BYTES, PendingFile, disk_space_is_sufficient, effective_resume_offset,
-    extension_from_url, media_task_path, random_task_path, write_chunks,
+    extension_from_url, media_task_path, write_chunks,
 };
 use super::*;
 use crate::platforms;
@@ -59,8 +59,8 @@ fn with_allowed_hosts_rejects_empty_or_invalid_entries() {
 }
 
 #[test]
-fn for_wechat_channels_uses_the_reviewed_host_set() {
-    let downloader = MediaDownloader::for_wechat_channels(test_workspace()).unwrap();
+fn for_wechat_uses_the_reviewed_host_set() {
+    let downloader = MediaDownloader::for_wechat(test_workspace()).unwrap();
     for host in platforms::wechat::REVIEWED_MEDIA_HOSTS {
         assert!(
             downloader.allowed_hosts().contains(*host),
@@ -109,7 +109,7 @@ fn for_douyin_uses_reviewed_host_set() {
 
 #[test]
 fn for_platform_maps_known_ids() {
-    let wechat = MediaDownloader::for_platform(crate::PlatformId::WechatChannels, test_workspace()).unwrap();
+    let wechat = MediaDownloader::for_platform(crate::PlatformId::Wechat, test_workspace()).unwrap();
     assert!(wechat.allowed_hosts().contains("finder.video.qq.com"));
     let douyin = MediaDownloader::for_platform(crate::PlatformId::Douyin, test_workspace()).unwrap();
     assert!(douyin.allowed_hosts().contains("aweme.snssdk.com"));
@@ -211,9 +211,11 @@ fn classifies_only_temporary_http_statuses_for_retry() {
 
 #[test]
 fn uses_a_canonical_hyphenated_uuid_for_temporary_video_names() {
-    let path = random_task_path(
+    let path = media_task_path(
         test_workspace().as_path(),
         &Url::parse("https://cdn.example/v.mp4").unwrap(),
+        None,
+        0,
     );
     let file_name = path.file_name().unwrap().to_str().unwrap();
     let uuid = file_name.strip_suffix(".mp4").unwrap();
@@ -233,7 +235,7 @@ fn uses_a_canonical_hyphenated_uuid_for_temporary_video_names() {
 fn media_task_path_uses_platform_stem_and_sequence() {
     let dir = test_workspace();
     let url = Url::parse("https://cdn.example/v.mp4").unwrap();
-    let stem = "wechat_sph_ArPbCgE03d";
+    let stem = "wechat_AzJ7CGPYWD";
 
     assert_eq!(
         media_task_path(dir.as_path(), &url, Some(stem), 0)
@@ -241,7 +243,7 @@ fn media_task_path_uses_platform_stem_and_sequence() {
             .unwrap()
             .to_str()
             .unwrap(),
-        "wechat_sph_ArPbCgE03d.mp4"
+        "wechat_AzJ7CGPYWD.mp4"
     );
     assert_eq!(
         media_task_path(dir.as_path(), &url, Some(stem), 1)
@@ -249,16 +251,16 @@ fn media_task_path_uses_platform_stem_and_sequence() {
             .unwrap()
             .to_str()
             .unwrap(),
-        "wechat_sph_ArPbCgE03d_1.mp4"
+        "wechat_AzJ7CGPYWD_1.mp4"
     );
 }
 
 #[test]
 fn with_file_stem_is_exposed_on_downloader() {
-    let downloader = MediaDownloader::for_wechat_channels(test_workspace())
+    let downloader = MediaDownloader::for_wechat(test_workspace())
         .unwrap()
-        .with_file_stem("wechat_sph_ArPbCgE03d");
-    assert_eq!(downloader.file_stem(), Some("wechat_sph_ArPbCgE03d"));
+        .with_file_stem("wechat_AzJ7CGPYWD");
+    assert_eq!(downloader.file_stem(), Some("wechat_AzJ7CGPYWD"));
 }
 
 #[test]

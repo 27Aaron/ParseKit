@@ -64,8 +64,8 @@ mod tests {
     fn video_post() -> ResolvedPost {
         ResolvedPost::new_video(
             PlatformId::Douyin,
-            "post",
-            Url::parse("https://www.douyin.com/video/1").expect("test URL"),
+            "7661946724177829115",
+            Url::parse("https://www.douyin.com/video/7661946724177829115").expect("test URL"),
             None,
             None,
             source("best"),

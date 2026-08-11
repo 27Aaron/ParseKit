@@ -134,17 +134,17 @@ mod tests {
     use super::*;
 
     #[test]
-    fn extract_share_url_accepts_wechat_channels() {
-        let url = extract_share_url("看看这个 https://weixin.qq.com/sph/A27pGwf5f9 不错")
+    fn extract_share_url_accepts_wechat() {
+        let url = extract_share_url("看看这个 https://weixin.qq.com/sph/AzJ7CGPYWD 不错")
             .expect("wechat share url should match");
-        assert_eq!(url.as_str(), "https://weixin.qq.com/sph/A27pGwf5f9");
+        assert_eq!(url.as_str(), "https://weixin.qq.com/sph/AzJ7CGPYWD");
     }
 
     #[test]
     fn extract_share_url_accepts_douyin() {
-        let url = extract_share_url("分享 https://v.douyin.com/iAbCdEf/ 给你")
+        let url = extract_share_url("分享 https://v.douyin.com/q75E3VmAe6A/ 给你")
             .expect("douyin share url should match");
-        assert_eq!(url.as_str(), "https://v.douyin.com/iAbCdEf/");
+        assert_eq!(url.as_str(), "https://v.douyin.com/q75E3VmAe6A/");
     }
 
     #[test]

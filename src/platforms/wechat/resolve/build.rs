@@ -121,7 +121,7 @@ pub(super) fn build_post(
         .and_then(|raw| Url::parse(&raw).ok())
         .filter(is_allowed_media_url);
     Ok(ResolvedPost::new_video(
-        PlatformId::WechatChannels,
+        PlatformId::Wechat,
         non_empty(export_id).unwrap_or(normalized.share_id),
         normalized.canonical_url,
         title,

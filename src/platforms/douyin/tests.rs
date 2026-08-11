@@ -12,16 +12,16 @@ use super::{
 fn extracts_urls_from_share_text() {
     let cases = [
         (
-            "打开抖音 https://v.douyin.com/iAbCdEf/ 看看",
-            "https://v.douyin.com/iAbCdEf/",
+            "5.64 08/07 dAG:/ t@R.KJ :0pm 【梁山伯_】 快醒醒呀兄弟们！# 梁山伯_ # 直播整活 # 雷姆 # 直播录屏分享  https://v.douyin.com/q75E3VmAe6A/ 复制此链接，打开Dou音搜索，直接观看视频！",
+            "https://v.douyin.com/q75E3VmAe6A/",
         ),
         (
-            "https://www.douyin.com/video/7123456789012345678",
-            "https://www.douyin.com/video/7123456789012345678",
+            "https://www.douyin.com/video/7661946724177829115",
+            "https://www.douyin.com/video/7661946724177829115",
         ),
         (
-            "https://www.iesdouyin.com/share/video/7123456789012345678/",
-            "https://www.iesdouyin.com/share/video/7123456789012345678/",
+            "https://www.iesdouyin.com/share/video/7661946724177829115/",
+            "https://www.iesdouyin.com/share/video/7661946724177829115/",
         ),
     ];
     for (input, expected) in cases {
@@ -49,20 +49,20 @@ fn rejects_non_douyin_and_user_paths() {
 #[test]
 fn extracts_aweme_ids() {
     assert_eq!(
-        extract_aweme_id("https://www.douyin.com/video/7123456789012345678?x=1").as_deref(),
-        Some("7123456789012345678")
+        extract_aweme_id("https://www.douyin.com/video/7661946724177829115?x=1").as_deref(),
+        Some("7661946724177829115")
     );
     assert_eq!(
-        extract_aweme_id("https://www.iesdouyin.com/share/video/7123456789012345678/").as_deref(),
-        Some("7123456789012345678")
+        extract_aweme_id("https://www.iesdouyin.com/share/video/7661946724177829115/").as_deref(),
+        Some("7661946724177829115")
     );
     assert_eq!(
-        extract_aweme_id("https://www.douyin.com/discover?modal_id=7123456789012345678").as_deref(),
-        Some("7123456789012345678")
+        extract_aweme_id("https://www.douyin.com/discover?modal_id=7661946724177829115").as_deref(),
+        Some("7661946724177829115")
     );
     assert_eq!(
-        extract_aweme_id("https://www.douyin.com/note/7123456789012345678").as_deref(),
-        Some("7123456789012345678")
+        extract_aweme_id("https://www.douyin.com/note/7661946724177829115").as_deref(),
+        Some("7661946724177829115")
     );
 }
 
@@ -73,9 +73,9 @@ fn builds_post_from_fixture_item_list() {
     ))
     .expect("committed douyin router fixture");
 
-    let post = build_post_from_router("7123456789012345678", &router).unwrap();
+    let post = build_post_from_router("7661946724177829115", &router).unwrap();
     assert_eq!(post.platform, PlatformId::Douyin);
-    assert_eq!(post.post_id, "7123456789012345678");
+    assert_eq!(post.post_id, "7661946724177829115");
     assert_eq!(post.title.as_deref(), Some("测试标题"));
     let primary = post.primary_video().expect("primary video");
     assert!(primary.url.as_str().contains("play/?video_id="));

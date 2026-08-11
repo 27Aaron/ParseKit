@@ -14,17 +14,17 @@ use ::url::Url;
 
 #[test]
 fn extracts_and_canonicalizes_share_url_from_text() {
-    let url = extract_share_url("看看这个 https://weixin.qq.com/sph/A27pGwf5f9。").unwrap();
-    assert_eq!(url.as_str(), "https://weixin.qq.com/sph/A27pGwf5f9");
+    let url = extract_share_url("看看这个 https://weixin.qq.com/sph/AzJ7CGPYWD。").unwrap();
+    assert_eq!(url.as_str(), "https://weixin.qq.com/sph/AzJ7CGPYWD");
 }
 
 #[test]
 fn rejects_preview_and_other_link_forms_during_extraction() {
     for input in [
-        "https://channels.weixin.qq.com/finder-preview/pages/sph?id=A27pGwf5f9",
-        "http://weixin.qq.com/sph/A27pGwf5f9",
-        "https://WEIXIN.QQ.COM/sph/A27pGwf5f9",
-        "https://weixin.qq.com/other/A27pGwf5f9",
+        "https://channels.weixin.qq.com/finder-preview/pages/sph?id=AzJ7CGPYWD",
+        "http://weixin.qq.com/sph/AzJ7CGPYWD",
+        "https://WEIXIN.QQ.COM/sph/AzJ7CGPYWD",
+        "https://weixin.qq.com/other/AzJ7CGPYWD",
     ] {
         assert!(matches!(
             extract_share_url(input),
@@ -36,14 +36,14 @@ fn rejects_preview_and_other_link_forms_during_extraction() {
 #[test]
 fn rejects_spoofed_or_insecure_urls() {
     for raw in [
-        "http://weixin.qq.com/sph/A27pGwf5f9",
-        "https://weixin.qq.com.evil.test/sph/A27pGwf5f9",
-        "https://weixin.qq.com./sph/A27pGwf5f9",
-        "https://user@weixin.qq.com/sph/A27pGwf5f9",
-        "https://weixin.qq.com/other/A27pGwf5f9",
-        "https://weixin.qq.com/sph/A27pGwf5f9/",
-        "https://weixin.qq.com/sph/A27pGwf5f9?from=share",
-        "https://weixin.qq.com/sph/A27pGwf5f9#fragment",
+        "http://weixin.qq.com/sph/AzJ7CGPYWD",
+        "https://weixin.qq.com.evil.test/sph/AzJ7CGPYWD",
+        "https://weixin.qq.com./sph/AzJ7CGPYWD",
+        "https://user@weixin.qq.com/sph/AzJ7CGPYWD",
+        "https://weixin.qq.com/other/AzJ7CGPYWD",
+        "https://weixin.qq.com/sph/AzJ7CGPYWD/",
+        "https://weixin.qq.com/sph/AzJ7CGPYWD?from=share",
+        "https://weixin.qq.com/sph/AzJ7CGPYWD#fragment",
     ] {
         assert!(
             normalize_share_url(&Url::parse(raw).unwrap()).is_err(),
@@ -136,8 +136,8 @@ fn parses_cookie_without_logging_or_decoding_it() {
 #[test]
 fn builds_post_from_feed_fixture_and_derives_media_from_preferred_h264_seed() {
     let normalized = NormalizedShareUrl {
-        share_id: "A27pGwf5f9".to_owned(),
-        canonical_url: Url::parse("https://weixin.qq.com/sph/A27pGwf5f9").unwrap(),
+        share_id: "AzJ7CGPYWD".to_owned(),
+        canonical_url: Url::parse("https://weixin.qq.com/sph/AzJ7CGPYWD").unwrap(),
     };
     let parse_data = ParseData {
         wx_export_id: "fallback-export-id".to_owned(),
@@ -177,8 +177,8 @@ fn builds_post_from_feed_fixture_and_derives_media_from_preferred_h264_seed() {
 #[test]
 fn accepts_root_level_feed_shape_and_prefers_direct_source() {
     let normalized = NormalizedShareUrl {
-        share_id: "A27pGwf5f9".to_owned(),
-        canonical_url: Url::parse("https://weixin.qq.com/sph/A27pGwf5f9").unwrap(),
+        share_id: "AzJ7CGPYWD".to_owned(),
+        canonical_url: Url::parse("https://weixin.qq.com/sph/AzJ7CGPYWD").unwrap(),
     };
     let parse_data = ParseData {
         wx_export_id: String::new(),
@@ -211,8 +211,8 @@ fn accepts_root_level_feed_shape_and_prefers_direct_source() {
 #[test]
 fn preserves_direct_identity_and_merges_metadata_when_urls_are_equal() {
     let normalized = NormalizedShareUrl {
-        share_id: "A27pGwf5f9".to_owned(),
-        canonical_url: Url::parse("https://weixin.qq.com/sph/A27pGwf5f9").unwrap(),
+        share_id: "AzJ7CGPYWD".to_owned(),
+        canonical_url: Url::parse("https://weixin.qq.com/sph/AzJ7CGPYWD").unwrap(),
     };
     let parse_data = ParseData {
         wx_export_id: String::new(),
@@ -257,8 +257,8 @@ fn preserves_direct_identity_and_merges_metadata_when_urls_are_equal() {
 #[test]
 fn direct_source_inherits_safe_matching_candidate_metadata() {
     let normalized = NormalizedShareUrl {
-        share_id: "A27pGwf5f9".to_owned(),
-        canonical_url: Url::parse("https://weixin.qq.com/sph/A27pGwf5f9").unwrap(),
+        share_id: "AzJ7CGPYWD".to_owned(),
+        canonical_url: Url::parse("https://weixin.qq.com/sph/AzJ7CGPYWD").unwrap(),
     };
     let parse_data = ParseData {
         wx_export_id: String::new(),
@@ -324,8 +324,8 @@ fn merge_does_not_overwrite_existing_decode_key() {
 #[test]
 fn direct_source_does_not_inherit_an_ambiguous_decode_key() {
     let normalized = NormalizedShareUrl {
-        share_id: "A27pGwf5f9".to_owned(),
-        canonical_url: Url::parse("https://weixin.qq.com/sph/A27pGwf5f9").unwrap(),
+        share_id: "AzJ7CGPYWD".to_owned(),
+        canonical_url: Url::parse("https://weixin.qq.com/sph/AzJ7CGPYWD").unwrap(),
     };
     let parse_data = ParseData {
         wx_export_id: String::new(),
@@ -359,8 +359,8 @@ fn direct_source_does_not_inherit_an_ambiguous_decode_key() {
 #[test]
 fn same_url_candidates_keep_distinct_decode_keys_as_fallbacks() {
     let normalized = NormalizedShareUrl {
-        share_id: "A27pGwf5f9".to_owned(),
-        canonical_url: Url::parse("https://weixin.qq.com/sph/A27pGwf5f9").unwrap(),
+        share_id: "AzJ7CGPYWD".to_owned(),
+        canonical_url: Url::parse("https://weixin.qq.com/sph/AzJ7CGPYWD").unwrap(),
     };
     let parse_data = ParseData {
         wx_export_id: String::new(),
@@ -401,8 +401,8 @@ fn same_url_candidates_keep_distinct_decode_keys_as_fallbacks() {
 #[test]
 fn prefers_higher_resolution_and_size_among_fallbacks() {
     let normalized = NormalizedShareUrl {
-        share_id: "A27pGwf5f9".to_owned(),
-        canonical_url: Url::parse("https://weixin.qq.com/sph/A27pGwf5f9").unwrap(),
+        share_id: "AzJ7CGPYWD".to_owned(),
+        canonical_url: Url::parse("https://weixin.qq.com/sph/AzJ7CGPYWD").unwrap(),
     };
     let parse_data = ParseData {
         wx_export_id: String::new(),
@@ -436,8 +436,8 @@ fn prefers_higher_resolution_and_size_among_fallbacks() {
 #[test]
 fn rejects_a_post_when_no_media_source_can_be_derived() {
     let normalized = NormalizedShareUrl {
-        share_id: "A27pGwf5f9".to_owned(),
-        canonical_url: Url::parse("https://weixin.qq.com/sph/A27pGwf5f9").unwrap(),
+        share_id: "AzJ7CGPYWD".to_owned(),
+        canonical_url: Url::parse("https://weixin.qq.com/sph/AzJ7CGPYWD").unwrap(),
     };
     let parse_data = ParseData {
         wx_export_id: String::new(),
@@ -461,8 +461,8 @@ fn rejects_a_post_when_no_media_source_can_be_derived() {
 #[test]
 fn tries_h265_when_h264_cannot_derive_a_media_source() {
     let normalized = NormalizedShareUrl {
-        share_id: "A27pGwf5f9".to_owned(),
-        canonical_url: Url::parse("https://weixin.qq.com/sph/A27pGwf5f9").unwrap(),
+        share_id: "AzJ7CGPYWD".to_owned(),
+        canonical_url: Url::parse("https://weixin.qq.com/sph/AzJ7CGPYWD").unwrap(),
     };
     let parse_data = ParseData {
         wx_export_id: String::new(),

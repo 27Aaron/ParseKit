@@ -58,7 +58,7 @@ pub struct DownloadRequestIdentity {
 }
 
 impl DownloadRequestIdentity {
-    pub fn wechat_channels() -> Self {
+    pub fn wechat() -> Self {
         platforms::wechat::download_identity()
     }
 
@@ -138,7 +138,6 @@ pub struct MediaDownloader {
     request_timeout: Duration,
     request_identity: DownloadRequestIdentity,
     disk_write_budget: Arc<StdMutex<DiskWriteBudget>>,
-    /// Optional basename without extension, e.g. `wechat_sph_ArPbCgE03d`.
     file_stem: Option<Arc<str>>,
 }
 
@@ -161,7 +160,7 @@ impl MediaDownloader {
         )
     }
 
-    pub fn for_wechat_channels(workspace_dir: impl Into<PathBuf>) -> Result<Self> {
+    pub fn for_wechat(workspace_dir: impl Into<PathBuf>) -> Result<Self> {
         Self::with_options(
             workspace_dir,
             platforms::wechat::REVIEWED_MEDIA_HOSTS.iter().copied(),
@@ -193,7 +192,7 @@ impl MediaDownloader {
         workspace_dir: impl Into<PathBuf>,
     ) -> Result<Self> {
         match platform_id {
-            crate::PlatformId::WechatChannels => Self::for_wechat_channels(workspace_dir),
+            crate::PlatformId::Wechat => Self::for_wechat(workspace_dir),
             crate::PlatformId::Douyin => Self::for_douyin(workspace_dir),
             crate::PlatformId::Bilibili => Self::for_bilibili(workspace_dir),
         }
@@ -224,10 +223,6 @@ impl MediaDownloader {
         self.allowed_hosts.as_ref()
     }
 
-    /// Sets the download basename (no extension), e.g. `wechat_sph_ArPbCgE03d`.
-    ///
-    /// Single-file downloads use `{stem}.{ext}`; multi-file downloads append
-    /// `_1`, `_2`, … for later items. Without a stem, paths use a random UUID.
     pub fn with_file_stem(mut self, file_stem: impl Into<String>) -> Self {
         let stem = file_stem.into();
         self.file_stem = if stem.is_empty() {
@@ -266,10 +261,7 @@ impl MediaDownloader {
             .await
     }
 
-    /// Downloads each source to a separate file.
-    ///
-    /// Completed files are removed if a later download fails.
-    /// With a configured file stem, names are `{stem}.{ext}`, `{stem}_1.{ext}`, …
+    /// Downloads each source to a separate file; cleans up earlier files on failure.
     pub async fn download_all<'a, I>(&self, sources: I) -> Result<Vec<DownloadedMedia>>
     where
         I: IntoIterator<Item = &'a MediaSource>,

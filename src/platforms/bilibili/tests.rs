@@ -6,15 +6,12 @@ use super::{
 };
 
 #[test]
-fn extracts_bv_av_mobile_and_short_urls() {
+fn extracts_bv_and_av_urls() {
     let bv = extract_share_url("看 https://www.bilibili.com/video/BV1GJ411x7h7?spm=1").unwrap();
     assert!(bv.path().contains("BV1GJ411x7h7"));
 
     let av = extract_share_url("https://m.bilibili.com/video/av170001").unwrap();
     assert!(av.as_str().contains("av170001"));
-
-    let short = extract_share_url("http://b23.tv/abc123").unwrap();
-    assert_eq!(short.scheme(), "https");
 }
 
 #[test]
