@@ -4,9 +4,7 @@ use std::{path::PathBuf, process::ExitCode};
 
 use clap::{Parser, Subcommand};
 use parse_kit::{
-    Error, ParseKit, ParseKitBuilder, ResolvedPost, Result,
-    media::{DownloadedMedia, MediaDownloader},
-    platforms::util::display_title,
+    Error, ParseKit, ParseKitBuilder, ResolvedPost, Result, platforms::util::display_title,
 };
 
 const DEFAULT_MAX_BYTES: u64 = 200 * 1024 * 1024;
@@ -128,7 +126,7 @@ async fn cmd_download(
     let dir = output.unwrap_or_else(default_output_dir);
     let limit = max_bytes.unwrap_or_else(default_max_bytes);
     let downloader = kit.media_downloader_for(&post, &dir, limit)?;
-    let media = download_primary(&post, &downloader).await?;
+    let media = downloader.download_playable(post.media_sources()).await?;
 
     if json {
         println!(
@@ -149,30 +147,6 @@ async fn cmd_download(
     // Keep file for the user; disable Drop cleanup by forgetting RAII.
     std::mem::forget(media);
     Ok(())
-}
-
-async fn download_primary(
-    post: &ResolvedPost,
-    downloader: &MediaDownloader,
-) -> Result<DownloadedMedia> {
-    let mut last_error = None;
-    for source in post.media_sources() {
-        match downloader.download(source).await {
-            Ok(media) => {
-                if let Some(key) = source.decode_key
-                    && let Err(error) =
-                        parse_kit::wechat::decrypt_file_prefix(&media.path, key).await
-                {
-                    let _ = media.cleanup().await;
-                    last_error = Some(error);
-                    continue;
-                }
-                return Ok(media);
-            }
-            Err(error) => last_error = Some(error),
-        }
-    }
-    Err(last_error.unwrap_or(Error::MediaUnavailable))
 }
 
 fn cmd_platforms() {

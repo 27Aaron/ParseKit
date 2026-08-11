@@ -229,6 +229,35 @@ impl MediaDownloader {
         self.download_url_with_callback(url, None, None).await
     }
 
+    /// Try each source in order; decrypt with that source's `decode_key` when set.
+    /// On decrypt failure, remove the temp file and continue.
+    pub async fn download_playable<'a, I>(&self, sources: I) -> Result<DownloadedMedia>
+    where
+        I: IntoIterator<Item = &'a MediaSource>,
+    {
+        let mut last_error = None;
+        for source in sources {
+            match self.download(source).await {
+                Ok(media) => {
+                    if let Some(key) = source.decode_key {
+                        match crate::platforms::wechat::decrypt_file_prefix(&media.path, key).await
+                        {
+                            Ok(_) => return Ok(media),
+                            Err(error) => {
+                                let _ = media.cleanup().await;
+                                last_error = Some(error);
+                            }
+                        }
+                    } else {
+                        return Ok(media);
+                    }
+                }
+                Err(error) => last_error = Some(error),
+            }
+        }
+        Err(last_error.unwrap_or(Error::MediaUnavailable))
+    }
+
     /// Progress callback: quick, sync; thresholds 20/40/60/80/100 when length known.
     pub async fn download_with_progress<F>(
         &self,
