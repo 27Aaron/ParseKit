@@ -19,9 +19,15 @@ pub mod wechat {
     pub use crate::platforms::wechat::*;
 }
 
+/// Convenience path for Douyin (`parse_core::douyin::…`).
+pub mod douyin {
+    pub use crate::platforms::douyin::*;
+}
+
 pub use error::{Error, Result};
 pub use hub::ParseHub;
 pub use model::{
-    MediaSource, MediaSourceKind, REVIEWED_WECHAT_MEDIA_HOSTS, ResolvedPost, VideoCodec,
+    MediaSource, MediaSourceKind, REVIEWED_DOUYIN_MEDIA_HOSTS, REVIEWED_WECHAT_MEDIA_HOSTS,
+    ResolvedPost, VideoCodec,
 };
-pub use platforms::{Platform, PlatformResolver};
+pub use platforms::{DouyinResolver, Platform, PlatformResolver, WechatResolver};
