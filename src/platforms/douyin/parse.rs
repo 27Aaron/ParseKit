@@ -137,20 +137,24 @@ fn collect_image_sources(item: &Value) -> Option<Vec<MediaSource>> {
         else {
             continue;
         };
+        let width = image
+            .get("width")
+            .and_then(Value::as_u64)
+            .and_then(|value| u32::try_from(value).ok());
+        let height = image
+            .get("height")
+            .and_then(Value::as_u64)
+            .and_then(|value| u32::try_from(value).ok());
         sources.push(MediaSource {
             url,
             codec: VideoCodec::Unknown,
             provenance: MediaSourceKind::Direct,
-            width: image
-                .get("width")
-                .and_then(Value::as_u64)
-                .and_then(|value| u32::try_from(value).ok()),
-            height: image
-                .get("height")
-                .and_then(Value::as_u64)
-                .and_then(|value| u32::try_from(value).ok()),
+            width,
+            height,
             size_hint: None,
             decode_key: None,
+            label: crate::model::resolution_tier_label(width, height).map(str::to_owned),
+            bitrate_bps: None,
         });
     }
     (!sources.is_empty()).then_some(sources)
@@ -163,7 +167,13 @@ fn collect_video_sources(video: &Value) -> Result<Vec<MediaSource>> {
     if let Some(bit_rates) = video.get("bit_rate").and_then(Value::as_array) {
         for item in bit_rates {
             let play = item.get("play_addr").unwrap_or(item);
-            if let Some(source) = play_addr_to_source(play) {
+            if let Some(mut source) = play_addr_to_source(play) {
+                let bitrate = item.get("bit_rate").and_then(Value::as_u64);
+                source.bitrate_bps = bitrate;
+                source.label = gear_label(item, play);
+                if source.codec == VideoCodec::Unknown {
+                    source.codec = codec_from_bitrate_item(item);
+                }
                 ranked.push((quality_score(item, play), source));
             }
         }
@@ -171,8 +181,11 @@ fn collect_video_sources(video: &Value) -> Result<Vec<MediaSource>> {
 
     if ranked.is_empty()
         && let Some(play_addr) = video.get("play_addr")
-        && let Some(source) = play_addr_to_source(play_addr)
+        && let Some(mut source) = play_addr_to_source(play_addr)
     {
+        source.label = crate::model::resolution_tier_label(source.width, source.height)
+            .map(str::to_owned)
+            .or_else(|| Some("web".into()));
         ranked.push((0, source));
     }
 
@@ -204,6 +217,8 @@ fn collect_video_sources(video: &Value) -> Result<Vec<MediaSource>> {
                 height,
                 size_hint: None,
                 decode_key: None,
+                label: Some("720p".into()),
+                bitrate_bps: None,
             },
         ));
     }
@@ -265,7 +280,56 @@ fn play_addr_to_source(play_addr: &Value) -> Option<MediaSource> {
         height,
         size_hint,
         decode_key: None,
+        label: crate::model::resolution_tier_label(width, height).map(str::to_owned),
+        bitrate_bps: None,
     })
+}
+
+fn gear_label(item: &Value, play: &Value) -> Option<String> {
+    for key in ["gear_name", "quality_type", "quality"] {
+        if let Some(raw) = item
+            .get(key)
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            return Some(raw.to_owned());
+        }
+        if let Some(n) = item.get(key).and_then(Value::as_u64)
+            && let Some(tier) = crate::model::resolution_tier_label(Some(n as u32), None)
+        {
+            return Some(tier.to_owned());
+        }
+    }
+    let width = play
+        .get("width")
+        .and_then(Value::as_u64)
+        .and_then(|value| u32::try_from(value).ok());
+    let height = play
+        .get("height")
+        .and_then(Value::as_u64)
+        .and_then(|value| u32::try_from(value).ok());
+    crate::model::resolution_tier_label(width, height).map(str::to_owned)
+}
+
+fn codec_from_bitrate_item(item: &Value) -> VideoCodec {
+    let h265 = item
+        .get("is_h265")
+        .and_then(Value::as_u64)
+        .map(|value| value != 0)
+        .or_else(|| item.get("is_h265").and_then(Value::as_bool))
+        .unwrap_or(false);
+    let bytevc1 = item
+        .get("is_bytevc1")
+        .and_then(Value::as_u64)
+        .map(|value| value != 0)
+        .or_else(|| item.get("is_bytevc1").and_then(Value::as_bool))
+        .unwrap_or(false);
+    if h265 || bytevc1 {
+        VideoCodec::H265
+    } else {
+        VideoCodec::Unknown
+    }
 }
 
 pub(super) fn remove_video_watermark(mut url: Url) -> Url {

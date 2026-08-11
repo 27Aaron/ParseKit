@@ -169,6 +169,113 @@ pub struct MediaSource {
     pub height: Option<u32>,
     pub size_hint: Option<u64>,
     pub decode_key: Option<u64>,
+    /// Human quality tag when known (`1080p`, `qn80`, `H265`, …).
+    pub label: Option<String>,
+    /// Approximate bitrate in bits per second when known.
+    pub bitrate_bps: Option<u64>,
+}
+
+impl MediaSource {
+    /// Builds a display label: prefer explicit [`Self::label`], else resolution tier.
+    pub fn quality_label(&self) -> String {
+        if let Some(label) = self
+            .label
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            return label.to_owned();
+        }
+        if let Some(tier) = resolution_tier_label(self.width, self.height) {
+            return tier.to_owned();
+        }
+        match self.provenance {
+            MediaSourceKind::H264 => "H264".into(),
+            MediaSourceKind::H265 => "H265".into(),
+            MediaSourceKind::Direct => "direct".into(),
+            MediaSourceKind::Derived => "derived".into(),
+            MediaSourceKind::Generic => "generic".into(),
+        }
+    }
+
+    /// One-line human summary for CLI / logs (no URL).
+    pub fn quality_summary(&self) -> String {
+        let mut parts = vec![self.quality_label()];
+        if let (Some(w), Some(h)) = (self.width, self.height) {
+            parts.push(format!("{w}×{h}"));
+        }
+        if let Some(bps) = self.bitrate_bps.filter(|v| *v > 0) {
+            parts.push(format_bitrate(bps));
+        }
+        if let Some(bytes) = self.size_hint.filter(|v| *v > 0) {
+            parts.push(format_bytes_short(bytes));
+        }
+        let codec = match self.codec {
+            VideoCodec::H264 => Some("h264"),
+            VideoCodec::H265 => Some("h265"),
+            VideoCodec::Unknown => None,
+        };
+        if let Some(codec) = codec {
+            parts.push(codec.into());
+        }
+        match self.provenance {
+            MediaSourceKind::H264 | MediaSourceKind::H265 => {}
+            MediaSourceKind::Direct => parts.push("origin".into()),
+            MediaSourceKind::Derived => parts.push("derived".into()),
+            MediaSourceKind::Generic => parts.push("generic".into()),
+        }
+        if self.decode_key.is_some() {
+            parts.push("encrypted".into());
+        }
+        parts.join("  ·  ")
+    }
+}
+
+/// Maps frame size to a common ladder tag using the shorter edge.
+pub fn resolution_tier_label(width: Option<u32>, height: Option<u32>) -> Option<&'static str> {
+    let short = match (width, height) {
+        (Some(w), Some(h)) => w.min(h),
+        (Some(w), None) => w,
+        (None, Some(h)) => h,
+        (None, None) => return None,
+    };
+    Some(match short {
+        n if n >= 2160 => "2160p",
+        n if n >= 1440 => "1440p",
+        n if n >= 1080 => "1080p",
+        n if n >= 720 => "720p",
+        n if n >= 540 => "540p",
+        n if n >= 480 => "480p",
+        n if n >= 360 => "360p",
+        n if n >= 240 => "240p",
+        _ => return None,
+    })
+}
+
+fn format_bitrate(bps: u64) -> String {
+    if bps >= 1_000_000 {
+        format!("{:.1} Mbps", bps as f64 / 1_000_000.0)
+    } else if bps >= 1_000 {
+        format!("{:.0} kbps", bps as f64 / 1_000.0)
+    } else {
+        format!("{bps} bps")
+    }
+}
+
+fn format_bytes_short(bytes: u64) -> String {
+    const KB: f64 = 1024.0;
+    const MB: f64 = KB * 1024.0;
+    const GB: f64 = MB * 1024.0;
+    let n = bytes as f64;
+    if n >= GB {
+        format!("{:.2} GB", n / GB)
+    } else if n >= MB {
+        format!("{:.1} MB", n / MB)
+    } else if n >= KB {
+        format!("{:.0} KB", n / KB)
+    } else {
+        format!("{bytes} B")
+    }
 }
 
 impl fmt::Debug for MediaSource {
@@ -183,6 +290,8 @@ impl fmt::Debug for MediaSource {
             .field("height", &self.height)
             .field("size_hint", &self.size_hint)
             .field("has_decode_key", &self.decode_key.is_some())
+            .field("label", &self.label)
+            .field("bitrate_bps", &self.bitrate_bps)
             .finish()
     }
 }
@@ -357,7 +466,37 @@ mod tests {
             height: Some(1280),
             size_hint: None,
             decode_key: None,
+            label: None,
+            bitrate_bps: None,
         }
+    }
+
+    #[test]
+    fn resolution_tier_label_uses_shorter_edge() {
+        assert_eq!(resolution_tier_label(Some(1920), Some(1080)), Some("1080p"));
+        assert_eq!(resolution_tier_label(Some(1080), Some(1920)), Some("1080p"));
+        assert_eq!(resolution_tier_label(Some(720), Some(1280)), Some("720p"));
+        assert_eq!(resolution_tier_label(None, None), None);
+    }
+
+    #[test]
+    fn quality_summary_includes_label_dims_and_codec() {
+        let source = MediaSource {
+            url: Url::parse("https://cdn.example/v.mp4").unwrap(),
+            codec: VideoCodec::H264,
+            provenance: MediaSourceKind::Direct,
+            width: Some(1080),
+            height: Some(1920),
+            size_hint: Some(8_500_000),
+            decode_key: None,
+            label: Some("1080p".into()),
+            bitrate_bps: Some(2_000_000),
+        };
+        let summary = source.quality_summary();
+        assert!(summary.contains("1080p"));
+        assert!(summary.contains("1080×1920"));
+        assert!(summary.contains("Mbps"));
+        assert!(summary.contains("h264"));
     }
 
     #[test]

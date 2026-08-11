@@ -202,6 +202,8 @@ mod tests {
                 height: None,
                 size_hint: None,
                 decode_key: None,
+                label: None,
+                bitrate_bps: None,
             },
             Vec::new(),
         );

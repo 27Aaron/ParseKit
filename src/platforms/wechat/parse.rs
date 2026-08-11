@@ -67,6 +67,9 @@ pub(super) fn build_post(
             let share_key = may_share_decode_key(&direct, candidate);
             merge_source_metadata(&mut direct, candidate, same_url, share_key);
         }
+        if direct.label.is_none() {
+            direct.label = wechat_quality_label(&direct);
+        }
         direct
     });
 
@@ -89,6 +92,8 @@ pub(super) fn build_post(
                 // Retain the candidate size because source ranking uses it.
                 size_hint: candidate.size_hint,
                 decode_key: candidate.decode_key,
+                label: wechat_quality_label(candidate),
+                bitrate_bps: candidate.bitrate_bps,
             };
             if !derived_sources
                 .iter()
@@ -173,16 +178,46 @@ pub(super) fn parse_source(
         return None;
     }
 
-    Some(MediaSource {
+    let width = number_at(value, "width").and_then(|value| u32::try_from(value).ok());
+    let height = number_at(value, "height").and_then(|value| u32::try_from(value).ok());
+    let mut source = MediaSource {
         url,
         codec,
         provenance: kind,
-        width: number_at(value, "width").and_then(|value| u32::try_from(value).ok()),
-        height: number_at(value, "height").and_then(|value| u32::try_from(value).ok()),
+        width,
+        height,
         size_hint: number_at(value, "fileSize"),
         decode_key: text_at(value, "decodeKey")
             .and_then(|value| value.parse::<u64>().ok())
             .or_else(|| number_at(value, "decodeKey")),
+        label: None,
+        bitrate_bps: None,
+    };
+    // Prefer URL quality= query, else resolution / codec tag.
+    source.label = query_value(&source.url, "quality")
+        .map(|q| q.to_ascii_uppercase())
+        .or_else(|| wechat_quality_label(&source));
+    Some(source)
+}
+
+fn wechat_quality_label(source: &MediaSource) -> Option<String> {
+    if let Some(tier) = crate::model::resolution_tier_label(source.width, source.height) {
+        return Some(match source.codec {
+            VideoCodec::H265 => format!("{tier}+H265"),
+            VideoCodec::H264 => format!("{tier}+H264"),
+            VideoCodec::Unknown => tier.to_owned(),
+        });
+    }
+    Some(match source.codec {
+        VideoCodec::H264 => "H264".into(),
+        VideoCodec::H265 => "H265".into(),
+        VideoCodec::Unknown => match source.provenance {
+            MediaSourceKind::Direct => "direct".into(),
+            MediaSourceKind::Derived => "derived".into(),
+            MediaSourceKind::H264 => "H264".into(),
+            MediaSourceKind::H265 => "H265".into(),
+            MediaSourceKind::Generic => "generic".into(),
+        },
     })
 }
 
@@ -313,5 +348,14 @@ pub(super) fn merge_source_metadata(
     }
     if inherit_size_hint && target.size_hint.is_none() {
         target.size_hint = source.size_hint;
+    }
+    if target.label.is_none() {
+        target.label = source
+            .label
+            .clone()
+            .or_else(|| wechat_quality_label(target));
+    }
+    if target.bitrate_bps.is_none() {
+        target.bitrate_bps = source.bitrate_bps;
     }
 }
