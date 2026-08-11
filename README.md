@@ -14,7 +14,7 @@ just download '分享链接'
 凭据（写入 `.env.local`，也可用手写 `.env`）：
 
 ```bash
-pk wechat login              # 粘贴元宝 Cookie → YUANBAO_COOKIE
+pk wechat login              # 微信扫码 → YUANBAO_COOKIE
 pk bilibili login            # 扫码 → BILIBILI_COOKIE（更高清晰度）
 pk wechat status && pk bilibili status
 ```

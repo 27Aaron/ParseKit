@@ -92,11 +92,11 @@ pub enum BilibiliCmd {
 
 #[derive(Debug, Subcommand)]
 pub enum WechatCmd {
-    /// Save a Yuanbao cookie (paste from browser DevTools).
+    /// Scan a QR code with WeChat; save the Yuanbao cookie to `.env.local`.
     ///
-    /// Pass the cookie as an argument, or omit it to paste interactively (stdin).
+    /// Passing a cookie explicitly keeps the manual fallback available.
     Login {
-        /// Full Cookie header value. If omitted, read one line from stdin.
+        /// Optional full Cookie header value; omit it to use QR login.
         cookie: Option<String>,
     },
     /// Remove `YUANBAO_COOKIE` from `.env.local` and the current process.
