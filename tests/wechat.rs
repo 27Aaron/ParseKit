@@ -12,7 +12,7 @@ const LIVE_DOWNLOAD_LIMIT_BYTES: u64 = 512 * 1024 * 1024;
 const LIVE_DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(20 * 60);
 
 #[tokio::test]
-#[ignore = "requires WECHAT_YUANBAO_COOKIE and live Tencent endpoints"]
+#[ignore = "requires YUANBAO_COOKIE and live Tencent endpoints"]
 async fn resolves_wechat_channels_sample() {
     let post = resolve_sample().await;
 
@@ -46,7 +46,7 @@ async fn resolves_wechat_channels_sample() {
 }
 
 #[tokio::test]
-#[ignore = "downloads live Tencent media and requires WECHAT_YUANBAO_COOKIE plus ffprobe"]
+#[ignore = "downloads live Tencent media and requires YUANBAO_COOKIE plus ffprobe"]
 async fn downloads_decrypts_and_probes_wechat_channels_sample() {
     let post = resolve_sample().await;
     let directory = TestDirectory::new();
@@ -87,13 +87,14 @@ async fn downloads_decrypts_and_probes_wechat_channels_sample() {
 
 async fn resolve_sample() -> ResolvedPost {
     let _ = dotenvy::from_filename(".env.local");
-    let cookie = match env::var("WECHAT_YUANBAO_COOKIE") {
+    let _ = dotenvy::dotenv();
+    let cookie = match env::var("YUANBAO_COOKIE") {
         Ok(cookie) if !cookie.trim().is_empty() => cookie,
         Ok(_) | Err(env::VarError::NotPresent) => {
-            panic!("WECHAT_YUANBAO_COOKIE is required for this ignored live test")
+            panic!("YUANBAO_COOKIE is required for this ignored live test")
         }
         Err(env::VarError::NotUnicode(_)) => {
-            panic!("WECHAT_YUANBAO_COOKIE must contain valid Unicode")
+            panic!("YUANBAO_COOKIE must contain valid Unicode")
         }
     };
 

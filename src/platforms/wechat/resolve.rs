@@ -71,7 +71,7 @@ impl WechatResolver {
         let timeout = RESOLVE_TIMEOUT;
         let cookie = cookie.into();
         if cookie.trim().is_empty() {
-            return Err(Error::Config("WECHAT_YUANBAO_COOKIE 不能为空".into()));
+            return Err(Error::Config("YUANBAO_COOKIE 不能为空".into()));
         }
         for endpoint in [&parse_endpoint, &feed_endpoint] {
             if endpoint.scheme() != "https" && !endpoint_is_loopback_http(endpoint) {
