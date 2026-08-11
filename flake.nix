@@ -41,7 +41,6 @@
 
               # Native dependencies, media tooling, and diagnostics.
               pkg-config
-              openssl
               ffmpeg-headless
               cacert
               git
