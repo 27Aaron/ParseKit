@@ -3,8 +3,9 @@
 use std::{path::PathBuf, time::Duration};
 
 use parse_kit::{
-    ContentKind, CredentialStatus, MediaSource, ResolvedPost, Result, media::MediaDownloader,
-    wechat::WechatCredentialStatus,
+    ContentKind, CredentialStatus, MediaSource, ResolvedPost, Result,
+    media::MediaDownloader,
+    wechat::{self, WechatCredentialStatus},
 };
 
 use crate::{
@@ -345,7 +346,7 @@ pub fn platforms(check: bool) -> Result<()> {
         );
     }
     if kit.wechat().is_none() {
-        ui::note("set YUANBAO_COOKIE to enable wechat");
+        ui::note("set YUANBAO_COOKIE or run: pk wechat login");
     }
     if kit
         .bilibili()
@@ -376,15 +377,20 @@ pub fn doctor() -> Result<()> {
 
 fn print_health(kit: &parse_kit::ParseKit) {
     match kit.wechat() {
-        None => ui::note("wechat disabled (no YUANBAO_COOKIE)"),
+        None => ui::note("wechat disabled (no YUANBAO_COOKIE; run: pk wechat login)"),
         Some(wechat) => match wechat.credential_status() {
             WechatCredentialStatus::Present => {
-                ui::ok("wechat", "cookie present (shape ok; not network-verified)")
+                ui::ok("wechat", "cookie present (shape ok; not network-verified)");
             }
-            WechatCredentialStatus::Incomplete => ui::err(
-                "wechat",
-                "cookie incomplete (missing hy_user/token markers)",
-            ),
+            WechatCredentialStatus::Incomplete => {
+                ui::err(
+                    "wechat",
+                    "cookie incomplete (missing hy_user/token markers)",
+                );
+            }
+            WechatCredentialStatus::Absent => {
+                ui::note("wechat cookie empty");
+            }
         },
     }
     if kit.douyin().is_some() {
@@ -409,6 +415,94 @@ fn print_health(kit: &parse_kit::ParseKit) {
             }
         },
     }
+}
+
+/// Paste Yuanbao cookie → write `YUANBAO_COOKIE` into `.env.local`.
+pub fn wechat_login(cookie_arg: Option<String>) -> Result<()> {
+    let cookie = match cookie_arg {
+        Some(value) if !value.trim().is_empty() => value.trim().to_owned(),
+        Some(_) => {
+            return Err(parse_kit::Error::Config(
+                "cookie 参数为空；请粘贴完整 Cookie 或省略参数后从 stdin 输入".into(),
+            ));
+        }
+        None => {
+            ui::note("paste YUANBAO_COOKIE from yuanbao.tencent.com DevTools");
+            ui::note("Application → Cookies → yuanbao.tencent.com → copy Cookie header");
+            ui::note("paste one line, then press Enter:");
+            let mut line = String::new();
+            std::io::stdin()
+                .read_line(&mut line)
+                .map_err(|error| parse_kit::Error::Config(format!("读取 stdin 失败: {error}")))?;
+            let trimmed = line.trim().to_owned();
+            if trimmed.is_empty() {
+                return Err(parse_kit::Error::Config("未读到 cookie".into()));
+            }
+            trimmed
+        }
+    };
+
+    match wechat::assess_yuanbao_cookie(&cookie) {
+        CredentialStatus::Present => {}
+        CredentialStatus::Incomplete => {
+            ui::err(
+                "cookie",
+                "missing hy_user / token markers — save aborted (paste full Cookie header)",
+            );
+            return Err(parse_kit::Error::Config(
+                "YUANBAO_COOKIE 形态不完整，未写入".into(),
+            ));
+        }
+        CredentialStatus::Absent => {
+            return Err(parse_kit::Error::Config("cookie 为空".into()));
+        }
+    }
+
+    config::save_yuanbao_cookie(&cookie)?;
+    let path = config::env_local_path();
+    ui::ok(
+        "login",
+        format!("saved YUANBAO_COOKIE to {}", path.display()),
+    );
+    ui::note("next `pk` in this dir loads .env.local automatically");
+    Ok(())
+}
+
+pub fn wechat_logout() -> Result<()> {
+    let removed = config::clear_yuanbao_cookie()?;
+    if removed {
+        ui::ok("logout", "removed YUANBAO_COOKIE from .env.local");
+    } else {
+        ui::note("no YUANBAO_COOKIE line in .env.local (process env cleared if set)");
+    }
+    Ok(())
+}
+
+pub fn wechat_status() -> Result<()> {
+    let kit = build_kit()?;
+    match kit.wechat() {
+        None => {
+            ui::note("wechat disabled — set YUANBAO_COOKIE or run: pk wechat login");
+        }
+        Some(wechat) => match wechat.credential_status() {
+            CredentialStatus::Present => {
+                ui::ok(
+                    "wechat",
+                    "logged in (hy_user/token present; not network-verified)",
+                );
+            }
+            CredentialStatus::Incomplete => {
+                ui::err(
+                    "wechat",
+                    "YUANBAO_COOKIE set but missing hy_user/token markers",
+                );
+            }
+            CredentialStatus::Absent => {
+                ui::note("wechat cookie empty");
+            }
+        },
+    }
+    Ok(())
 }
 
 /// Web QR login → write `BILIBILI_COOKIE` into `.env.local`.

@@ -73,6 +73,11 @@ pub enum Commands {
         #[command(subcommand)]
         command: BilibiliCmd,
     },
+    /// WeChat Channels helpers (Yuanbao cookie).
+    Wechat {
+        #[command(subcommand)]
+        command: WechatCmd,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -82,5 +87,20 @@ pub enum BilibiliCmd {
     /// Remove `BILIBILI_COOKIE` from `.env.local` and the current process.
     Logout,
     /// Show whether a Bilibili cookie is loaded (local shape only).
+    Status,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum WechatCmd {
+    /// Save a Yuanbao cookie (paste from browser DevTools).
+    ///
+    /// Pass the cookie as an argument, or omit it to paste interactively (stdin).
+    Login {
+        /// Full Cookie header value. If omitted, read one line from stdin.
+        cookie: Option<String>,
+    },
+    /// Remove `YUANBAO_COOKIE` from `.env.local` and the current process.
+    Logout,
+    /// Show whether a Yuanbao cookie is loaded (local shape only).
     Status,
 }

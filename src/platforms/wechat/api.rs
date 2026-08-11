@@ -6,16 +6,15 @@ use serde_json::Value;
 
 use crate::{
     Error, Result,
+    auth::cookie_value as shared_cookie_value,
     platforms::util::{map_network_error as map_network_error_msg, read_body_limited},
 };
 
 const MAX_JSON_BYTES: usize = 2 * 1024 * 1024;
 
+/// Cookie lookup; prefers non-empty values (matches historical WeChat behavior).
 pub(super) fn cookie_value(cookie: &str, name: &str) -> Option<String> {
-    cookie.split(';').find_map(|part| {
-        let (key, value) = part.trim().split_once('=')?;
-        (key == name && !value.is_empty()).then(|| value.to_owned())
-    })
+    shared_cookie_value(cookie, name).filter(|value| !value.is_empty())
 }
 
 pub(super) fn text_at(value: &Value, key: &str) -> Option<String> {

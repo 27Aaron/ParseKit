@@ -6,7 +6,7 @@ use parse_kit::{ParseKit, ParseKitBuilder, Result};
 
 /// Env key for Bilibili web cookie (`SESSDATA=...; bili_jct=...`).
 pub const BILIBILI_COOKIE_ENV: &str = "BILIBILI_COOKIE";
-/// Env key for WeChat / Yuanbao cookie.
+/// Env key for WeChat Channels via Yuanbao (`hy_user` / `hy_token` / …).
 pub const YUANBAO_COOKIE_ENV: &str = "YUANBAO_COOKIE";
 
 /// Preferred path for CLI-written credentials (does not clobber hand-edited `.env`).
@@ -46,32 +46,47 @@ pub fn default_output_dir() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("./downloads"))
 }
 
-/// Persist Bilibili cookie into `.env.local` and the current process env.
-pub fn save_bilibili_cookie(cookie: &str) -> Result<()> {
+/// Persist a cookie env key into `.env.local` and the current process env.
+pub fn save_cookie_env(key: &str, cookie: &str) -> Result<()> {
     let path = env_local_path();
-    parse_kit::auth::upsert_dotenv_var(&path, BILIBILI_COOKIE_ENV, cookie).map_err(|error| {
+    parse_kit::auth::upsert_dotenv_var(&path, key, cookie).map_err(|error| {
         parse_kit::Error::Config(format!("无法写入 {}: {error}", path.display()))
     })?;
-    // So the same process (and subsequent commands in this shell if exported) sees it.
-    // SAFETY: single-threaded CLI entry after dotenv load; only mutates our key.
+    // SAFETY: single-threaded CLI entry after dotenv load; only mutates our keys.
     unsafe {
-        std::env::set_var(BILIBILI_COOKIE_ENV, cookie);
+        std::env::set_var(key, cookie);
     }
     Ok(())
 }
 
-/// Remove Bilibili cookie from `.env.local` (and process env).
-pub fn clear_bilibili_cookie() -> Result<bool> {
+/// Remove a cookie env key from `.env.local` (and process env).
+pub fn clear_cookie_env(key: &str) -> Result<bool> {
     let path = env_local_path();
     let removed = if path.exists() {
-        parse_kit::auth::remove_dotenv_var(Path::new(&path), BILIBILI_COOKIE_ENV).map_err(
-            |error| parse_kit::Error::Config(format!("无法更新 {}: {error}", path.display())),
-        )?
+        parse_kit::auth::remove_dotenv_var(Path::new(&path), key).map_err(|error| {
+            parse_kit::Error::Config(format!("无法更新 {}: {error}", path.display()))
+        })?
     } else {
         false
     };
     unsafe {
-        std::env::remove_var(BILIBILI_COOKIE_ENV);
+        std::env::remove_var(key);
     }
     Ok(removed)
+}
+
+pub fn save_bilibili_cookie(cookie: &str) -> Result<()> {
+    save_cookie_env(BILIBILI_COOKIE_ENV, cookie)
+}
+
+pub fn clear_bilibili_cookie() -> Result<bool> {
+    clear_cookie_env(BILIBILI_COOKIE_ENV)
+}
+
+pub fn save_yuanbao_cookie(cookie: &str) -> Result<()> {
+    save_cookie_env(YUANBAO_COOKIE_ENV, cookie)
+}
+
+pub fn clear_yuanbao_cookie() -> Result<bool> {
+    clear_cookie_env(YUANBAO_COOKIE_ENV)
 }
