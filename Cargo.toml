@@ -9,8 +9,19 @@ description = "Multi-platform social media parse and media download toolkit"
 repository = "https://github.com/27Aaron/ParseKit"
 readme = "README.md"
 
+[features]
+default = ["cli"]
+cli = ["dep:clap", "dep:dotenvy"]
+
+[[bin]]
+name = "pk"
+path = "src/bin/pk.rs"
+required-features = ["cli"]
+
 [dependencies]
 chrono = "0.4"
+clap = { version = "4", features = ["derive", "env"], optional = true }
+dotenvy = { version = "0.15", optional = true }
 futures-util = "0.3"
 libc = "0.2"
 regex = "1"

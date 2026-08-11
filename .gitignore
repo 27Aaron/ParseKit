@@ -8,6 +8,9 @@ rustc-ice-*.txt
 .env.local
 .env.*.local
 
+# CLI download output
+/downloads/
+
 # Local planning / notes (never publish)
 /Todo/
 
