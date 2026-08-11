@@ -10,37 +10,38 @@
 | `douyin` | 抖音公开分享页（视频 / 图集） | 无 |
 | `bilibili` | 哔哩哔哩公开稿件（BV/av/b23） | 无 |
 
-## Workspace
+## 布局
 
-```text
-parse-kit/          # 本仓库根：库 crate
-crates/pk/          # CLI crate（depends on parse-kit）
-```
+单 package：库在 `src/`，CLI 在 `src/bin/pk/`（feature `cli`，默认开启）。
 
 ```bash
-cargo test -p parse-kit --locked --all-targets
-cargo run -p pk -- platforms
+cargo test --locked --all-targets
+cargo run --bin pk -- platforms
+cargo build --no-default-features   # 只要库
 ```
+
 
 ## CLI
 
 ```bash
 cp .env.example .env.local   # 填 YUANBAO_COOKIE 等
-cargo run -p pk -- platforms
-cargo run -p pk -- platforms --check
-cargo run -p pk -- doctor
-cargo run -p pk -- resolve "分享文案或链接"
-cargo run -p pk -- download "分享文案或链接" -o ./downloads
+cargo run --bin pk -- platforms
+cargo run --bin pk -- platforms --check
+cargo run --bin pk -- doctor
+cargo run --bin pk -- resolve "分享文案或链接"
+cargo run --bin pk -- download "分享文案或链接" -o ./downloads
 # 多画质：默认最高；--source 0 指定下标；--prefer smallest 优先小文件
-cargo run -p pk -- download "…" --source 1
-cargo run -p pk -- download "…" --prefer smallest
+cargo run --bin pk -- download "…" --source 1
+cargo run --bin pk -- download "…" --prefer smallest
 # 图集默认下全部图片；--first-only 只要第一张
-cargo run -p pk -v -- download "…"   # verbose tracing
+cargo run --bin pk -v -- download "…"   # verbose tracing
 ```
 
 环境变量见 `.env.example`。
 
 ## 库用法（Bot / 其它程序）
+
+依赖时建议 `parse-kit = { path = "...", default-features = false }`，避免拉入 CLI 依赖。
 
 ```rust
 use parse_kit::{ParseKit, PlatformId};
