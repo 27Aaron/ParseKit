@@ -6,6 +6,10 @@ on:
   pull_request:
     branches: [main]
 
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   check:
     runs-on: ubuntu-latest
@@ -16,6 +20,9 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
+
+      # Cache Cargo registry + target/ so later runs mostly recompile your crate.
+      - uses: Swatinem/rust-cache@v2
 
       - run: cargo fmt --all -- --check
       - run: cargo test --locked --all-targets
