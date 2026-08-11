@@ -18,7 +18,8 @@ use super::http::check_response_status;
 use super::ssrf::{is_forbidden_ip, normalize_allowed_hosts, validate_media_url};
 use super::write::{
     MIN_FREE_DISK_BYTES, PendingFile, disk_space_is_sufficient, effective_resume_offset,
-    extension_from_url, media_task_path, write_chunks,
+    extension_from_content_type, extension_from_url, media_task_path, path_with_better_extension,
+    write_chunks,
 };
 use super::*;
 use crate::platforms;
@@ -488,6 +489,49 @@ fn extension_from_url_guesses_common_types() {
         extension_from_url(&Url::parse("https://x/play/?video_id=1").unwrap()),
         "mp4"
     );
+    // WeChat Channels CDN: extension-less stodownload paths.
+    assert_eq!(
+        extension_from_url(
+            &Url::parse(
+                "https://finder.video.qq.com/251/20302/stodownload?encfilekey=k&token=t"
+            )
+            .unwrap()
+        ),
+        "mp4"
+    );
+    assert_eq!(
+        extension_from_url(
+            &Url::parse(
+                "https://finder.video.qq.com/251/20304/stodownload?encfilekey=k&token=t&picformat=200&wxampicformat=503"
+            )
+            .unwrap()
+        ),
+        "jpg"
+    );
+}
+
+#[test]
+fn extension_from_content_type_maps_common_mimes() {
+    assert_eq!(extension_from_content_type("video/mp4"), Some("mp4"));
+    assert_eq!(
+        extension_from_content_type("video/mp4; charset=binary"),
+        Some("mp4")
+    );
+    assert_eq!(extension_from_content_type("image/jpeg"), Some("jpg"));
+    assert_eq!(extension_from_content_type("application/octet-stream"), None);
+}
+
+#[test]
+fn path_with_better_extension_only_upgrades_bin() {
+    let dir = test_workspace();
+    let bin = dir.join("clip.bin");
+    let mp4 = dir.join("clip.mp4");
+    assert_eq!(
+        path_with_better_extension(bin.clone(), "mp4"),
+        dir.join("clip.mp4")
+    );
+    assert_eq!(path_with_better_extension(mp4.clone(), "jpg"), mp4);
+    assert_eq!(path_with_better_extension(bin, "bin"), dir.join("clip.bin"));
 }
 
 #[test]

@@ -36,8 +36,8 @@ use self::http::{
 use self::progress::ProgressReporter;
 use self::ssrf::{normalize_allowed_hosts, resolve_public_addresses, validate_media_url};
 use self::write::{
-    WrittenMedia, create_private_file, effective_resume_offset, media_task_path,
-    open_private_file_append, write_chunks,
+    WrittenMedia, create_private_file, effective_resume_offset, extension_from_content_type,
+    media_task_path, open_private_file_append, path_with_better_extension, write_chunks,
 };
 
 const MAX_REDIRECTS: usize = 5;
@@ -441,7 +441,7 @@ impl MediaDownloader {
         _size_hint: Option<u64>,
         progress_callback: Option<ProgressCallback>,
         decode_key: Option<u64>,
-        path: PathBuf,
+        mut path: PathBuf,
         mut resume_from: u64,
     ) -> Result<DownloadedMedia> {
         // Allow one full restart when a server ignores `Range`.
@@ -465,6 +465,23 @@ impl MediaDownloader {
                 check_response_status(status)?;
             }
             reject_encoded_response(&response)?;
+
+            // Upgrade provisional `.bin` using Content-Type when the URL had no suffix.
+            if resume_from == 0 {
+                if let Some(content_type) = response
+                    .headers()
+                    .get(reqwest::header::CONTENT_TYPE)
+                    .and_then(|value| value.to_str().ok())
+                {
+                    if let Some(ext) = extension_from_content_type(content_type) {
+                        path = path_with_better_extension(path, ext);
+                    }
+                }
+                // Encrypted WeChat prefixes are always BMFF video containers.
+                if decode_key.is_some() {
+                    path = path_with_better_extension(path, "mp4");
+                }
+            }
 
             let content_length = checked_content_length(&response)?;
             let total_hint = if resume_from > 0 {

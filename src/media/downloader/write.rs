@@ -38,11 +38,46 @@ pub(super) fn media_task_path(
     directory.join(name)
 }
 
-/// Infers a safe extension from the URL path, falling back to `bin`.
+/// Infers a safe extension from the media URL, falling back to `bin`.
+///
+/// WeChat Channels CDN paths are often extension-less (`…/stodownload?…`);
+/// Douyin uses `…/play/?video_id=…`. Prefer a real path suffix when present.
 pub(super) fn extension_from_url(url: &url::Url) -> &'static str {
     let path = url.path().to_ascii_lowercase();
-    let ext = path.rsplit('.').next().unwrap_or("");
-    match ext {
+    if let Some(ext) = extension_from_path_segment(&path) {
+        return ext;
+    }
+
+    let query = url.query().unwrap_or("").to_ascii_lowercase();
+    // finder.video.qq.com/…/stodownload — video vs cover distinguished by query.
+    if path.contains("stodownload") {
+        if query.contains("picformat") || query.contains("wxampic") {
+            return "jpg";
+        }
+        return "mp4";
+    }
+    if path.contains("play")
+        || path.contains("video")
+        || path.contains("stream")
+        || path.contains("media")
+        || path.contains("download")
+    {
+        return "mp4";
+    }
+    if path.contains("image") || path.contains("cover") || path.contains("thumb") || path.contains("pic")
+    {
+        return "jpg";
+    }
+    "bin"
+}
+
+fn extension_from_path_segment(path: &str) -> Option<&'static str> {
+    let segment = path.rsplit('/').next().unwrap_or("");
+    let (name, ext) = segment.rsplit_once('.')?;
+    if name.is_empty() || ext.is_empty() || ext.len() > 5 {
+        return None;
+    }
+    Some(match ext {
         "mp4" | "m4v" | "mov" => "mp4",
         "m4s" | "mpd" => "m4s",
         "flv" => "flv",
@@ -52,15 +87,50 @@ pub(super) fn extension_from_url(url: &url::Url) -> &'static str {
         "webp" => "webp",
         "gif" => "gif",
         "ts" => "ts",
-        _ => {
-            if path.contains("play") || path.contains("video") {
-                "mp4"
-            } else if path.contains("image") || path.contains("cover") {
-                "jpg"
-            } else {
-                "bin"
-            }
-        }
+        "mp3" => "mp3",
+        "m4a" => "m4a",
+        _ => return None,
+    })
+}
+
+/// Maps a response `Content-Type` to a file extension when the URL had none.
+pub(super) fn extension_from_content_type(value: &str) -> Option<&'static str> {
+    let mime = value
+        .split(';')
+        .next()
+        .unwrap_or(value)
+        .trim()
+        .to_ascii_lowercase();
+    Some(match mime.as_str() {
+        "video/mp4" | "video/mpeg" | "application/mp4" => "mp4",
+        "video/webm" => "webm",
+        "video/x-flv" | "video/flv" => "flv",
+        "video/quicktime" => "mp4",
+        "image/jpeg" | "image/jpg" => "jpg",
+        "image/png" => "png",
+        "image/webp" => "webp",
+        "image/gif" => "gif",
+        "audio/mpeg" | "audio/mp3" => "mp3",
+        "audio/mp4" | "audio/aac" => "m4a",
+        other if other.starts_with("video/") => "mp4",
+        other if other.starts_with("image/") => "jpg",
+        _ => return None,
+    })
+}
+
+/// Prefer a real extension over a provisional `bin` name.
+pub(super) fn path_with_better_extension(path: PathBuf, preferred: &str) -> PathBuf {
+    if preferred.is_empty() || preferred == "bin" {
+        return path;
+    }
+    let current = path
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .unwrap_or("bin");
+    if current == "bin" {
+        path.with_extension(preferred)
+    } else {
+        path
     }
 }
 
