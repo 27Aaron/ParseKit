@@ -6,7 +6,10 @@
 //! # Platforms
 //!
 //! Concrete resolvers live under [`platforms`]. Register new ones via the
-//! [`platforms::Platform`] enum and [`ParseHub::new`] — see the module docs.
+//! [`platforms::Platform`] enum and [`ParseHub::builder`] — see the module docs.
+//!
+//! Platform-private pieces (CDN host allowlists, WeChat decrypt, cookies) stay
+//! under each platform module rather than shared `model` / `media`.
 
 pub mod error;
 pub mod hub;
@@ -26,8 +29,9 @@ pub mod douyin {
 
 pub use error::{Error, Result};
 pub use hub::ParseHub;
-pub use model::{
-    MediaSource, MediaSourceKind, REVIEWED_DOUYIN_MEDIA_HOSTS, REVIEWED_WECHAT_MEDIA_HOSTS,
-    ResolvedPost, VideoCodec,
-};
+pub use model::{MediaSource, MediaSourceKind, ResolvedPost, VideoCodec};
 pub use platforms::{DouyinResolver, Platform, PlatformResolver, WechatResolver};
+
+// Platform CDN allowlists re-exported for older call sites.
+pub use platforms::douyin::REVIEWED_DOUYIN_MEDIA_HOSTS;
+pub use platforms::wechat::REVIEWED_WECHAT_MEDIA_HOSTS;
