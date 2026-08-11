@@ -1,6 +1,6 @@
 //! Render human-readable and JSON output.
 
-use parse_kit::{Error, MediaSource, MediaSourceKind, ResolvedPost, Result, VideoCodec};
+use parse_kit::{Error, MediaSource, ResolvedPost, Result};
 
 use crate::ui;
 
@@ -9,14 +9,17 @@ pub fn print_post_summary(post: &ResolvedPost) {
     for (action, detail) in summary_rows(post) {
         ui::ok(&action, detail);
     }
+    let total = post.media_sources().count();
+    ui::ok("sources", format!("{total} 路（[0] 默认最高）"));
     for (index, source) in post.media_sources().enumerate() {
+        let mark = if index == 0 { "★" } else { "·" };
         ui::ok(
             &format!("source[{index}]"),
-            source_detail(source, index == 0),
+            format!("{mark}  {}", source.quality_summary()),
         );
         ui::sub(source.url.as_str());
     }
-    if post.media_sources().count() > 1 {
+    if total > 1 {
         ui::ok("hint", "download --source N  or  --prefer smallest");
     }
 }
@@ -24,15 +27,18 @@ pub fn print_post_summary(post: &ResolvedPost) {
 /// Streamed summary with spin→✓ reveal (interactive TTY).
 pub async fn stream_post_summary(post: &ResolvedPost) {
     ui::reveal_ok_rows(summary_rows(post)).await;
+    let total = post.media_sources().count();
+    ui::reveal_ok("sources", format!("{total} 路（[0] 默认最高）")).await;
     for (index, source) in post.media_sources().enumerate() {
+        let mark = if index == 0 { "★" } else { "·" };
         ui::reveal_ok(
             &format!("source[{index}]"),
-            source_detail(source, index == 0),
+            format!("{mark}  {}", source.quality_summary()),
         )
         .await;
         ui::reveal_sub(source.url.as_str()).await;
     }
-    if post.media_sources().count() > 1 {
+    if total > 1 {
         ui::reveal_ok("hint", "download --source N  or  --prefer smallest").await;
     }
 }
@@ -47,39 +53,11 @@ fn summary_rows(post: &ResolvedPost) -> Vec<(String, String)> {
     ]
 }
 
-fn source_detail(source: &MediaSource, is_primary: bool) -> String {
-    let mark = if is_primary { "★" } else { "·" };
-    format!(
-        "{mark}  {:<8}  {:>10}  {:>8}  {:<8}  key={}",
-        source_kind_label(source),
-        format_dims(source),
-        format_size(source),
-        format_codec(source.codec),
-        if source.decode_key.is_some() {
-            "yes"
-        } else {
-            "no"
-        },
-    )
-}
-
 pub fn print_post_json(post: &ResolvedPost) -> Result<()> {
     let sources: Vec<_> = post
         .media_sources()
         .enumerate()
-        .map(|(index, source)| {
-            serde_json::json!({
-                "index": index,
-                "kind": source_kind_label(source),
-                "codec": source.codec,
-                "width": source.width,
-                "height": source.height,
-                "size_hint": source.size_hint,
-                "has_decode_key": source.decode_key.is_some(),
-                "url": source.url.as_str(),
-                "default": index == 0,
-            })
-        })
+        .map(|(index, source)| source_json(index, source))
         .collect();
 
     let value = serde_json::json!({
@@ -98,34 +76,25 @@ pub fn print_post_json(post: &ResolvedPost) -> Result<()> {
     Ok(())
 }
 
-fn source_kind_label(source: &MediaSource) -> &'static str {
-    match source.provenance {
-        MediaSourceKind::Direct => "origin",
-        MediaSourceKind::Derived => "derived",
-        MediaSourceKind::H264 => "h264",
-        MediaSourceKind::H265 => "h265",
-        MediaSourceKind::Generic => "generic",
-    }
-}
-
-fn format_dims(source: &MediaSource) -> String {
-    match (source.width, source.height) {
-        (Some(w), Some(h)) => format!("{w}x{h}"),
-        _ => "-".into(),
-    }
-}
-
-fn format_size(source: &MediaSource) -> String {
-    match source.size_hint {
-        Some(bytes) => ui::format_bytes(bytes),
-        None => "-".into(),
-    }
-}
-
-fn format_codec(codec: VideoCodec) -> &'static str {
-    match codec {
-        VideoCodec::H264 => "h264",
-        VideoCodec::H265 => "h265",
-        VideoCodec::Unknown => "unknown",
-    }
+fn source_json(index: usize, source: &MediaSource) -> serde_json::Value {
+    serde_json::json!({
+        "index": index,
+        "label": source.quality_label(),
+        "summary": source.quality_summary(),
+        "kind": match source.provenance {
+            parse_kit::MediaSourceKind::Direct => "origin",
+            parse_kit::MediaSourceKind::Derived => "derived",
+            parse_kit::MediaSourceKind::H264 => "h264",
+            parse_kit::MediaSourceKind::H265 => "h265",
+            parse_kit::MediaSourceKind::Generic => "generic",
+        },
+        "codec": source.codec,
+        "width": source.width,
+        "height": source.height,
+        "size_hint": source.size_hint,
+        "bitrate_bps": source.bitrate_bps,
+        "has_decode_key": source.decode_key.is_some(),
+        "url": source.url.as_str(),
+        "default": index == 0,
+    })
 }

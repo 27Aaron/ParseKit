@@ -307,6 +307,8 @@ fn merge_does_not_overwrite_existing_decode_key() {
         height: None,
         size_hint: None,
         decode_key: Some(111),
+        label: None,
+        bitrate_bps: None,
     };
     let source = MediaSource {
         url: target.url.clone(),
@@ -316,6 +318,8 @@ fn merge_does_not_overwrite_existing_decode_key() {
         height: Some(1),
         size_hint: Some(9),
         decode_key: Some(222),
+        label: None,
+        bitrate_bps: None,
     };
     merge_source_metadata(&mut target, &source, true, true);
     assert_eq!(target.decode_key, Some(111));

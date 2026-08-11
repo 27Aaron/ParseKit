@@ -123,20 +123,47 @@ fn collect_durl_sources(play: &Value) -> Vec<MediaSource> {
 
     let item = &durl[0];
     let size_hint = item.get("size").and_then(Value::as_u64);
+    // Progressive playurl requests typically target 1080P (qn=80) first; label
+    // from quality when present, otherwise leave unset for display fallback.
+    let qn_label = play
+        .get("quality")
+        .and_then(Value::as_u64)
+        .and_then(bilibili_qn_label)
+        .map(str::to_owned);
     let mut sources = Vec::new();
-    if let Some(source) = media_url_item_to_source(item, "url", MediaSourceKind::Direct) {
+    if let Some(mut source) = media_url_item_to_source(item, "url", MediaSourceKind::Direct) {
+        source.label = qn_label.clone();
         sources.push(source);
     }
     if let Some(backups) = item.get("backup_url").and_then(Value::as_array) {
         for backup in backups {
             if let Some(raw) = backup.as_str()
-                && let Some(source) = https_media_source(raw, size_hint, MediaSourceKind::Derived)
+                && let Some(mut source) =
+                    https_media_source(raw, size_hint, MediaSourceKind::Derived)
             {
+                source.label = qn_label.clone();
                 sources.push(source);
             }
         }
     }
     sources
+}
+
+fn bilibili_qn_label(qn: u64) -> Option<&'static str> {
+    Some(match qn {
+        127 => "8K",
+        126 => "Dolby",
+        125 => "HDR",
+        120 => "4K",
+        116 => "1080P60",
+        112 => "1080P+",
+        80 => "1080P",
+        74 => "720P60",
+        64 => "720P",
+        32 => "480P",
+        16 => "360P",
+        _ => return None,
+    })
 }
 
 fn collect_dash_video_sources(play: &Value) -> Vec<MediaSource> {
@@ -163,6 +190,9 @@ fn collect_dash_video_sources(play: &Value) -> Vec<MediaSource> {
             {
                 source.width = width;
                 source.height = height;
+                source.bitrate_bps = (bandwidth > 0).then_some(bandwidth);
+                source.label =
+                    crate::model::resolution_tier_label(width, height).map(str::to_owned);
                 ranked.push((bandwidth, source));
                 break;
             }
@@ -179,6 +209,9 @@ fn collect_dash_video_sources(play: &Value) -> Vec<MediaSource> {
                 {
                     source.width = width;
                     source.height = height;
+                    source.bitrate_bps = (bandwidth > 0).then_some(bandwidth);
+                    source.label =
+                        crate::model::resolution_tier_label(width, height).map(str::to_owned);
                     ranked.push((bandwidth.saturating_sub(1), source));
                 }
             }
@@ -218,5 +251,7 @@ fn https_media_source(
         height: None,
         size_hint,
         decode_key: None,
+        label: None,
+        bitrate_bps: None,
     })
 }

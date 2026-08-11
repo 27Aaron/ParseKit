@@ -2,11 +2,14 @@
 
 mod http;
 mod progress;
+mod size_probe;
 mod ssrf;
 mod write;
 
 #[cfg(test)]
 mod tests;
+
+pub use size_probe::enrich_missing_size_hints;
 
 use std::{
     collections::HashMap,
