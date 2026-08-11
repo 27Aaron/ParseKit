@@ -160,6 +160,34 @@ impl MediaItem {
     }
 }
 
+impl ResolvedPost {
+    /// Mutable access to the n-th media source in [`Self::media_sources`] order.
+    pub fn media_source_at_mut(&mut self, index: usize) -> Option<&mut MediaSource> {
+        let mut remaining = index;
+        for item in &mut self.media {
+            match item {
+                MediaItem::Video { primary, fallbacks } => {
+                    if remaining == 0 {
+                        return Some(primary);
+                    }
+                    remaining -= 1;
+                    if remaining < fallbacks.len() {
+                        return Some(&mut fallbacks[remaining]);
+                    }
+                    remaining -= fallbacks.len();
+                }
+                MediaItem::Image { source } | MediaItem::Audio { source } => {
+                    if remaining == 0 {
+                        return Some(source);
+                    }
+                    remaining -= 1;
+                }
+            }
+        }
+        None
+    }
+}
+
 #[derive(Clone)]
 pub struct MediaSource {
     pub url: Url,

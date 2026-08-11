@@ -84,10 +84,15 @@ impl ParseKit {
         async move {
             let platform = self.matching_platform(input)?;
             let id = platform.platform_id().as_str();
-            platform
+            let mut post = platform
                 .resolve_text(input)
                 .instrument(tracing::info_span!("platform.resolve", platform = id))
-                .await
+                .await?;
+            // Soft-fill size_hint when upstream omitted it (Douyin/WeChat often do).
+            crate::media::enrich_missing_size_hints(&mut post)
+                .instrument(tracing::info_span!("media.probe_size", platform = id))
+                .await;
+            Ok(post)
         }
         .instrument(span)
         .await
@@ -98,10 +103,14 @@ impl ParseKit {
         async move {
             let platform = self.matching_platform(url.as_str())?;
             let id = platform.platform_id().as_str();
-            platform
+            let mut post = platform
                 .resolve_url(url)
                 .instrument(tracing::info_span!("platform.resolve", platform = id))
-                .await
+                .await?;
+            crate::media::enrich_missing_size_hints(&mut post)
+                .instrument(tracing::info_span!("media.probe_size", platform = id))
+                .await;
+            Ok(post)
         }
         .instrument(span)
         .await
