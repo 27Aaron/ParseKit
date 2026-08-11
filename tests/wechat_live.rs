@@ -1,19 +1,13 @@
-use std::{collections::HashSet, env, path::PathBuf, time::Duration};
+use std::{env, path::PathBuf, time::Duration};
 
 use parse_core::{
     media::{MediaDownloader, decrypt_file_prefix, probe_media},
-    model::{MediaSource, MediaSourceKind, ResolvedPost},
+    model::{MediaSource, MediaSourceKind, REVIEWED_WECHAT_MEDIA_HOSTS, ResolvedPost},
     wechat::WechatResolver,
 };
 use uuid::Uuid;
 
 const SAMPLE_SHARE_URL: &str = "https://weixin.qq.com/sph/A27pGwf5f9";
-const ALLOWED_MEDIA_HOSTS: &[&str] = &[
-    "finder.video.qq.com",
-    "findermp.video.qq.com",
-    "finder.video.wechat.com",
-    "findermp.video.wechat.com",
-];
 const LIVE_DOWNLOAD_LIMIT_BYTES: u64 = 512 * 1024 * 1024;
 const LIVE_DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(20 * 60);
 
@@ -56,14 +50,10 @@ async fn resolves_wechat_channels_sample() {
 async fn downloads_decrypts_and_probes_wechat_channels_sample() {
     let post = resolve_sample().await;
     let directory = TestDirectory::new();
-    let allowed_hosts = ALLOWED_MEDIA_HOSTS
-        .iter()
-        .map(|host| (*host).to_owned())
-        .collect::<HashSet<_>>();
     let downloader = MediaDownloader::with_options(
         directory.path(),
         LIVE_DOWNLOAD_LIMIT_BYTES,
-        allowed_hosts,
+        REVIEWED_WECHAT_MEDIA_HOSTS.iter().copied(),
         LIVE_DOWNLOAD_TIMEOUT,
     )
     .unwrap_or_else(|_| panic!("failed to initialize the live media downloader"));
@@ -153,7 +143,7 @@ fn assert_safe_media_source(source: &MediaSource) {
         source
             .url
             .host_str()
-            .is_some_and(|host| ALLOWED_MEDIA_HOSTS.contains(&host)),
+            .is_some_and(|host| REVIEWED_WECHAT_MEDIA_HOSTS.contains(&host)),
         "media source host is not allowlisted"
     );
 }

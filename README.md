@@ -27,6 +27,10 @@ use parse_core::{ParseHub, media::MediaDownloader};
 async fn main() -> parse_core::Result<()> {
     let hub = ParseHub::new(std::env::var("WECHAT_YUANBAO_COOKIE").unwrap())?;
     let post = hub.resolve_text("分享文案或链接…").await?;
+
+    // CDN allowlist is explicit per platform (WeChat convenience helper shown).
+    // Multi-platform apps: MediaDownloader::with_allowed_hosts(dir, max, hosts).
+    let _downloader = MediaDownloader::for_wechat_channels("/tmp/parse-media", 200 * 1024 * 1024)?;
     println!("{:#?}", post);
     Ok(())
 }
