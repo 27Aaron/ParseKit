@@ -237,7 +237,6 @@ fn accepts_only_reviewed_https_media_urls() {
     for raw in [
         "http://finder.video.qq.com/path",
         "https://user:pass@finder.video.qq.com/path",
-        "https://finder.video.qq.com:444/path",
         "https://finder.video.qq.com/path#fragment",
         "https://finder.video.qq.com.evil.test/path",
         "https://finder.video.qq.com./path",
@@ -247,6 +246,14 @@ fn accepts_only_reviewed_https_media_urls() {
         let url = Url::parse(raw).unwrap();
         assert!(validate_media_url(&url, &allowed).is_err(), "{raw}");
     }
+
+    // CDN edges may serve media on non-443 HTTPS ports.
+    let non_default_port =
+        Url::parse("https://finder.video.qq.com:20443/path?token=secret").unwrap();
+    assert_eq!(
+        validate_media_url(&non_default_port, &allowed).unwrap(),
+        "finder.video.qq.com"
+    );
 }
 
 #[tokio::test]

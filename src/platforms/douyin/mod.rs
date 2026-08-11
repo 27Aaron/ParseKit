@@ -49,6 +49,8 @@ pub const REVIEWED_MEDIA_HOSTS: &[&str] = &[
     "www.iesdouyin.com",
     ".douyinvod.com",
     ".douyincdn.com",
+    // Play endpoints sometimes redirect through jspcdn edges (often :20443).
+    ".jspcdn.cn",
     ".bytevcloudcdn.com",
     ".bytecdn.cn",
     ".bytecdn.com",

@@ -26,12 +26,12 @@ where
 
 /// Returns `true` when a URL has a safe HTTPS authority and a reviewed host.
 ///
-/// DNS and IP checks run separately immediately before download.
+/// Non-443 HTTPS ports are allowed (CDN edges sometimes use them). DNS and IP
+/// checks run separately immediately before download.
 pub(crate) fn is_reviewed_https_url(url: &Url, rules: &[&str]) -> bool {
     url.scheme() == "https"
         && url.username().is_empty()
         && url.password().is_none()
-        && url.port().is_none_or(|port| port == 443)
         && url.fragment().is_none()
         && url.host_str().is_some_and(|host| {
             !host.ends_with('.') && host_matches_rules(host, rules.iter().copied())
@@ -58,7 +58,6 @@ mod tests {
         for raw in [
             "http://media.example/video.mp4",
             "https://user@media.example/video.mp4",
-            "https://media.example:444/video.mp4",
             "https://media.example/video.mp4#fragment",
             "https://media.example./video.mp4",
             "https://media.example.evil.test/video.mp4",
@@ -68,6 +67,9 @@ mod tests {
         }
 
         let url = Url::parse("https://media.example:443/video.mp4").expect("test URL");
+        assert!(is_reviewed_https_url(&url, &rules));
+        // CDN-style non-default HTTPS port on a reviewed host is accepted.
+        let url = Url::parse("https://media.example:20443/video.mp4").expect("test URL");
         assert!(is_reviewed_https_url(&url, &rules));
     }
 }
