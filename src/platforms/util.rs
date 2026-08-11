@@ -1,15 +1,8 @@
 //! Shared helpers for platform resolvers.
 
-use crate::{Error, Result};
+use crate::{Error, PlatformId, Result, url};
 
-/// Trailing punctuation from chat paste.
-pub const URL_TRAILING_PUNCT: &[char] = &[
-    '。', '，', ',', '.', '！', '!', '？', '?', ')', '）', ']', '】', '、',
-];
-
-pub fn trim_url_candidate(matched: &str) -> &str {
-    matched.trim_end_matches(URL_TRAILING_PUNCT)
-}
+pub use crate::url::{URL_TRAILING_PUNCT, trim_url_candidate};
 
 /// Do not format `reqwest::Error` (may contain signed URLs).
 pub fn map_network_error(error: &reqwest::Error, timeout_msg: &str, fail_msg: &str) -> Error {
@@ -20,15 +13,15 @@ pub fn map_network_error(error: &reqwest::Error, timeout_msg: &str, fail_msg: &s
     }
 }
 
-pub fn default_title_for_platform(platform: &str) -> &'static str {
+pub fn default_title_for_platform(platform: PlatformId) -> &'static str {
     match platform {
-        "wechat_channels" => "微信视频号视频",
-        "douyin" => "抖音视频",
-        _ => "视频",
+        PlatformId::WechatChannels => "微信视频号视频",
+        PlatformId::Douyin => "抖音视频",
+        PlatformId::Bilibili => "哔哩哔哩视频",
     }
 }
 
-pub fn display_title_for_post(platform: &str, title: Option<&str>) -> String {
+pub fn display_title_for_post(platform: PlatformId, title: Option<&str>) -> String {
     title
         .map(str::trim)
         .filter(|value| !value.is_empty())
@@ -39,7 +32,7 @@ pub fn display_title_for_post(platform: &str, title: Option<&str>) -> String {
 }
 
 pub fn display_title(post: &crate::ResolvedPost) -> String {
-    display_title_for_post(post.platform.as_str(), post.title.as_deref())
+    display_title_for_post(post.platform, post.title.as_deref())
 }
 
 pub async fn read_body_limited(
@@ -71,29 +64,26 @@ pub async fn read_body_limited(
     Ok(bytes)
 }
 
+/// Re-export for callers that only depend on platforms::util historically.
+pub use url::clean_tracking_params;
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn trims_common_chat_punctuation() {
-        assert_eq!(
-            trim_url_candidate("https://v.douyin.com/abc/。"),
-            "https://v.douyin.com/abc/"
-        );
-        assert_eq!(
-            trim_url_candidate("https://weixin.qq.com/sph/x】"),
-            "https://weixin.qq.com/sph/x"
-        );
-    }
-
-    #[test]
     fn display_title_prefers_non_empty_title() {
-        assert_eq!(display_title_for_post("douyin", Some("  标题  ")), "标题");
         assert_eq!(
-            display_title_for_post("wechat_channels", None),
+            display_title_for_post(PlatformId::Douyin, Some("  标题  ")),
+            "标题"
+        );
+        assert_eq!(
+            display_title_for_post(PlatformId::WechatChannels, None),
             "微信视频号视频"
         );
-        assert_eq!(display_title_for_post("unknown", Some("")), "视频");
+        assert_eq!(
+            display_title_for_post(PlatformId::Bilibili, Some("")),
+            "哔哩哔哩视频"
+        );
     }
 }

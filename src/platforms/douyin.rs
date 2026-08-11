@@ -12,7 +12,7 @@ use serde_json::Value;
 use url::Url;
 
 use crate::{
-    Error, Result,
+    Error, PlatformId, Result,
     media::DownloadRequestIdentity,
     model::{MediaSource, MediaSourceKind, ResolvedPost, VideoCodec},
     platforms::{
@@ -196,8 +196,8 @@ impl DouyinResolver {
 }
 
 impl PlatformResolver for DouyinResolver {
-    fn platform_id(&self) -> &'static str {
-        "douyin"
+    fn platform_id(&self) -> PlatformId {
+        PlatformId::Douyin
     }
 
     fn extract_share_url(&self, input: &str) -> Result<Url> {
@@ -344,18 +344,6 @@ fn build_post_from_router(aweme_id: &str, router: &Value) -> Result<ResolvedPost
         .and_then(|items| items.first())
         .ok_or(Error::NotFound)?;
 
-    // Image / note posts: not supported yet.
-    if item
-        .get("images")
-        .and_then(Value::as_array)
-        .is_some_and(|images| !images.is_empty())
-        || item
-            .get("image_post_info")
-            .is_some_and(|value| !value.is_null())
-    {
-        return Err(Error::MediaUnavailable);
-    }
-
     let post_id = item
         .get("aweme_id")
         .and_then(Value::as_str)
@@ -370,63 +358,106 @@ fn build_post_from_router(aweme_id: &str, router: &Value) -> Result<ResolvedPost
         .filter(|value| !value.is_empty())
         .map(str::to_owned);
 
-    let video = item.get("video").ok_or(Error::MediaUnavailable)?;
-    let (play_url, width, height) = pick_play_url(video)?;
-    let cover_url = pick_cover_url(video);
-
     let canonical_url = Url::parse(&format!("https://www.douyin.com/video/{post_id}"))
         .expect("aweme id forms a valid URL");
 
+    // Image / note posts.
+    if let Some(images) = collect_image_sources(item)
+        && !images.is_empty()
+    {
+        let cover_url = images.first().map(|source| source.url.clone());
+        return ResolvedPost::new_image_set(
+            PlatformId::Douyin,
+            post_id,
+            canonical_url,
+            title,
+            cover_url,
+            images,
+        );
+    }
+
+    let video = item.get("video").ok_or(Error::MediaUnavailable)?;
+    let mut sources = collect_video_sources(video)?;
+    if sources.is_empty() {
+        return Err(Error::MediaUnavailable);
+    }
+    let cover_url = pick_cover_url(video);
+    let primary = sources.remove(0);
     Ok(ResolvedPost::new_video(
-        "douyin",
+        PlatformId::Douyin,
         post_id,
         canonical_url,
         title,
         cover_url,
-        MediaSource {
-            url: play_url,
-            codec: VideoCodec::Unknown,
-            provenance: MediaSourceKind::Direct,
-            width,
-            height,
-            size_hint: None,
-            decode_key: None,
-        },
-        Vec::new(),
+        primary,
+        sources,
     ))
 }
 
-fn pick_play_url(video: &Value) -> Result<(Url, Option<u32>, Option<u32>)> {
-    // Prefer bit_rate (usually higher quality).
-    if let Some(bit_rates) = video.get("bit_rate").and_then(Value::as_array) {
-        let mut ranked = bit_rates.iter().collect::<Vec<_>>();
-        ranked.sort_by_key(|item| {
-            let play = item.get("play_addr").unwrap_or(item);
-            let width = play.get("width").and_then(Value::as_u64).unwrap_or(0);
-            let height = play.get("height").and_then(Value::as_u64).unwrap_or(0);
-            let size = play.get("data_size").and_then(Value::as_u64).unwrap_or(0);
-            let bitrate = item.get("bit_rate").and_then(Value::as_u64).unwrap_or(0);
-            (width.saturating_mul(height), size, bitrate)
+fn collect_image_sources(item: &Value) -> Option<Vec<MediaSource>> {
+    let images = item.get("images").and_then(Value::as_array)?;
+    if images.is_empty() {
+        return None;
+    }
+    let mut sources = Vec::new();
+    for image in images {
+        let url_list = image
+            .get("url_list")
+            .or_else(|| image.pointer("/display_image/url_list"))
+            .and_then(Value::as_array)?;
+        let raw = url_list
+            .iter()
+            .filter_map(Value::as_str)
+            .rev()
+            .find(|value| !value.is_empty())?;
+        let url = Url::parse(raw).ok()?;
+        if url.scheme() != "https" {
+            continue;
+        }
+        sources.push(MediaSource {
+            url,
+            codec: VideoCodec::Unknown,
+            provenance: MediaSourceKind::Direct,
+            width: image
+                .get("width")
+                .and_then(Value::as_u64)
+                .map(|value| value as u32),
+            height: image
+                .get("height")
+                .and_then(Value::as_u64)
+                .map(|value| value as u32),
+            size_hint: None,
+            decode_key: None,
         });
-        for item in ranked.into_iter().rev() {
+    }
+    (!sources.is_empty()).then_some(sources)
+}
+
+/// Ranked video qualities: highest first (primary + fallbacks).
+fn collect_video_sources(video: &Value) -> Result<Vec<MediaSource>> {
+    let mut ranked = Vec::new();
+
+    if let Some(bit_rates) = video.get("bit_rate").and_then(Value::as_array) {
+        for item in bit_rates {
             let play = item.get("play_addr").unwrap_or(item);
-            if let Some(result) = play_addr_to_url(play) {
-                return Ok(result);
+            if let Some(source) = play_addr_to_source(play) {
+                ranked.push((quality_score(item, play), source));
             }
         }
     }
 
-    if let Some(play_addr) = video.get("play_addr")
-        && let Some(result) = play_addr_to_url(play_addr)
+    if ranked.is_empty()
+        && let Some(play_addr) = video.get("play_addr")
+        && let Some(source) = play_addr_to_source(play_addr)
     {
-        return Ok(result);
+        ranked.push((0, source));
     }
 
-    // Fallback: watermark-free play API from uri.
-    if let Some(uri) = video
-        .pointer("/play_addr/uri")
-        .and_then(Value::as_str)
-        .filter(|value| !value.is_empty())
+    if ranked.is_empty()
+        && let Some(uri) = video
+            .pointer("/play_addr/uri")
+            .and_then(Value::as_str)
+            .filter(|value| !value.is_empty())
     {
         let width = video
             .pointer("/play_addr/width")
@@ -440,13 +471,51 @@ fn pick_play_url(video: &Value) -> Result<(Url, Option<u32>, Option<u32>)> {
             "https://www.douyin.com/aweme/v1/play/?video_id={uri}&ratio=720p&line=0"
         ))
         .map_err(|_| Error::UpstreamChanged)?;
-        return Ok((url, width, height));
+        ranked.push((
+            0,
+            MediaSource {
+                url,
+                codec: VideoCodec::Unknown,
+                provenance: MediaSourceKind::Direct,
+                width,
+                height,
+                size_hint: None,
+                decode_key: None,
+            },
+        ));
     }
 
-    Err(Error::MediaUnavailable)
+    ranked.sort_by_key(|(score, _)| std::cmp::Reverse(*score));
+    let mut sources = Vec::new();
+    for (_, source) in ranked {
+        if sources
+            .iter()
+            .any(|existing: &MediaSource| existing.url == source.url)
+        {
+            continue;
+        }
+        sources.push(source);
+    }
+    if sources.is_empty() {
+        Err(Error::MediaUnavailable)
+    } else {
+        Ok(sources)
+    }
 }
 
-fn play_addr_to_url(play_addr: &Value) -> Option<(Url, Option<u32>, Option<u32>)> {
+fn quality_score(item: &Value, play: &Value) -> u64 {
+    let width = play.get("width").and_then(Value::as_u64).unwrap_or(0);
+    let height = play.get("height").and_then(Value::as_u64).unwrap_or(0);
+    let size = play.get("data_size").and_then(Value::as_u64).unwrap_or(0);
+    let bitrate = item.get("bit_rate").and_then(Value::as_u64).unwrap_or(0);
+    width
+        .saturating_mul(height)
+        .saturating_mul(1_000)
+        .saturating_add(size)
+        .saturating_add(bitrate)
+}
+
+fn play_addr_to_source(play_addr: &Value) -> Option<MediaSource> {
     let url_list = play_addr.get("url_list")?.as_array()?;
     let raw = url_list
         .iter()
@@ -465,7 +534,16 @@ fn play_addr_to_url(play_addr: &Value) -> Option<(Url, Option<u32>, Option<u32>)
         .get("height")
         .and_then(Value::as_u64)
         .map(|value| value as u32);
-    Some((url, width, height))
+    let size_hint = play_addr.get("data_size").and_then(Value::as_u64);
+    Some(MediaSource {
+        url,
+        codec: VideoCodec::Unknown,
+        provenance: MediaSourceKind::Direct,
+        width,
+        height,
+        size_hint,
+        decode_key: None,
+    })
 }
 
 fn remove_video_watermark(url: &str) -> String {
@@ -556,7 +634,7 @@ mod tests {
         .expect("committed douyin router fixture");
 
         let post = build_post_from_router("7123456789012345678", &router).unwrap();
-        assert_eq!(post.platform, "douyin");
+        assert_eq!(post.platform, PlatformId::Douyin);
         assert_eq!(post.post_id, "7123456789012345678");
         assert_eq!(post.title.as_deref(), Some("测试标题"));
         assert!(
@@ -611,7 +689,7 @@ mod tests {
     }
 
     #[test]
-    fn image_posts_are_media_unavailable_for_now() {
+    fn image_posts_become_image_set() {
         let router = serde_json::json!({
             "loaderData": {
                 "video_(id)/page": {
@@ -621,15 +699,83 @@ mod tests {
                         "item_list": [{
                             "aweme_id": "1",
                             "desc": "图集",
-                            "images": [{"url_list": ["https://p3.douyinpic.com/a.jpg"]}],
+                            "images": [
+                                {"url_list": ["https://p3.douyinpic.com/a.jpg"], "width": 1080, "height": 1440},
+                                {"url_list": ["https://p3.douyinpic.com/b.jpg"]}
+                            ],
                             "video": {}
                         }]
                     }
                 }
             }
         });
-        let err = build_post_from_router("1", &router).unwrap_err();
-        assert!(matches!(err, Error::MediaUnavailable));
+        let post = build_post_from_router("1", &router).unwrap();
+        assert_eq!(post.kind, crate::ContentKind::ImageSet);
+        assert_eq!(post.media_sources().count(), 2);
+        assert!(post.primary_video().is_none());
+        assert!(
+            post.media_sources()
+                .next()
+                .unwrap()
+                .url
+                .as_str()
+                .contains("douyinpic.com")
+        );
+    }
+
+    #[test]
+    fn multi_bitrate_becomes_fallbacks() {
+        let router = serde_json::json!({
+            "loaderData": {
+                "video_(id)/page": {
+                    "videoInfoRes": {
+                        "status_code": 0,
+                        "filter_list": [],
+                        "item_list": [{
+                            "aweme_id": "9",
+                            "desc": "多清晰度",
+                            "video": {
+                                "bit_rate": [
+                                    {
+                                        "bit_rate": 500_000,
+                                        "play_addr": {
+                                            "url_list": ["https://aweme.snssdk.com/aweme/v1/play/?video_id=low"],
+                                            "width": 720,
+                                            "height": 1280,
+                                            "data_size": 1_000
+                                        }
+                                    },
+                                    {
+                                        "bit_rate": 2_000_000,
+                                        "play_addr": {
+                                            "url_list": ["https://aweme.snssdk.com/aweme/v1/play/?video_id=high"],
+                                            "width": 1080,
+                                            "height": 1920,
+                                            "data_size": 5_000
+                                        }
+                                    }
+                                ]
+                            }
+                        }]
+                    }
+                }
+            }
+        });
+        let post = build_post_from_router("9", &router).unwrap();
+        assert!(
+            post.primary_video()
+                .unwrap()
+                .url
+                .as_str()
+                .contains("video_id=high")
+        );
+        assert_eq!(post.video_fallbacks().len(), 1);
+        assert!(
+            post.video_fallbacks()[0]
+                .url
+                .as_str()
+                .contains("video_id=low")
+        );
     }
 
     #[test]

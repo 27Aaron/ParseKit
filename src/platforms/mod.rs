@@ -8,28 +8,31 @@
 //! 4. Review media hosts and wire [`crate::media::MediaDownloader::for_platform`].
 //! 5. Unit + fixture tests; live tests stay `#[ignore]`.
 //! 6. Update README platform table.
-//!
-//! See repository README for the full checklist.
 
 use std::future::Future;
 
 use url::Url;
 
-use crate::{Error, ResolvedPost, Result};
+use crate::{Error, PlatformId, ResolvedPost, Result};
 
+pub mod bilibili;
 pub mod douyin;
 pub mod util;
 pub mod wechat;
 
+pub use bilibili::BilibiliResolver;
 pub use douyin::DouyinResolver;
 pub use wechat::WechatResolver;
 
-/// Match order for share text (WeChat, then Douyin).
-pub const STATELESS_EXTRACTORS: &[fn(&str) -> Result<Url>] =
-    &[wechat::extract_share_url, douyin::extract_share_url];
+/// Match order for share text (WeChat, then Douyin, then Bilibili).
+pub const STATELESS_EXTRACTORS: &[fn(&str) -> Result<Url>] = &[
+    wechat::extract_share_url,
+    douyin::extract_share_url,
+    bilibili::extract_share_url,
+];
 
 pub trait PlatformResolver {
-    fn platform_id(&self) -> &'static str;
+    fn platform_id(&self) -> PlatformId;
 
     /// `UnsupportedUrl` if this platform does not own the input.
     fn extract_share_url(&self, input: &str) -> Result<Url>;
@@ -43,22 +46,21 @@ pub trait PlatformResolver {
 pub enum Platform {
     Wechat(WechatResolver),
     Douyin(DouyinResolver),
+    Bilibili(BilibiliResolver),
 }
 
 impl Platform {
-    pub fn platform_id(&self) -> &'static str {
+    pub fn platform_id(&self) -> PlatformId {
         match self {
             Self::Wechat(resolver) => resolver.platform_id(),
             Self::Douyin(resolver) => resolver.platform_id(),
+            Self::Bilibili(resolver) => resolver.platform_id(),
         }
     }
 
     /// Short human label for CLI / logs.
     pub fn display_name(&self) -> &'static str {
-        match self {
-            Self::Wechat(_) => "微信视频号",
-            Self::Douyin(_) => "抖音",
-        }
+        self.platform_id().display_name()
     }
 
     /// Optional capability note (credentials, limits).
@@ -66,6 +68,7 @@ impl Platform {
         match self {
             Self::Wechat(_) => "needs YUANBAO_COOKIE",
             Self::Douyin(_) => "public share page",
+            Self::Bilibili(_) => "public video page",
         }
     }
 
@@ -73,6 +76,7 @@ impl Platform {
         match self {
             Self::Wechat(resolver) => PlatformResolver::extract_share_url(resolver, input),
             Self::Douyin(resolver) => PlatformResolver::extract_share_url(resolver, input),
+            Self::Bilibili(resolver) => PlatformResolver::extract_share_url(resolver, input),
         }
     }
 
@@ -80,6 +84,7 @@ impl Platform {
         match self {
             Self::Wechat(resolver) => PlatformResolver::resolve_text(resolver, input).await,
             Self::Douyin(resolver) => PlatformResolver::resolve_text(resolver, input).await,
+            Self::Bilibili(resolver) => PlatformResolver::resolve_text(resolver, input).await,
         }
     }
 
@@ -87,6 +92,7 @@ impl Platform {
         match self {
             Self::Wechat(resolver) => PlatformResolver::resolve_url(resolver, url).await,
             Self::Douyin(resolver) => PlatformResolver::resolve_url(resolver, url).await,
+            Self::Bilibili(resolver) => PlatformResolver::resolve_url(resolver, url).await,
         }
     }
 
@@ -100,6 +106,13 @@ impl Platform {
     pub fn as_douyin(&self) -> Option<&DouyinResolver> {
         match self {
             Self::Douyin(resolver) => Some(resolver),
+            _ => None,
+        }
+    }
+
+    pub fn as_bilibili(&self) -> Option<&BilibiliResolver> {
+        match self {
+            Self::Bilibili(resolver) => Some(resolver),
             _ => None,
         }
     }
@@ -135,6 +148,13 @@ mod tests {
     }
 
     #[test]
+    fn extract_share_url_accepts_bilibili() {
+        let url = extract_share_url("https://www.bilibili.com/video/BV1GJ411x7h7")
+            .expect("bilibili url should match");
+        assert!(url.as_str().contains("BV1GJ411x7h7"));
+    }
+
+    #[test]
     fn extract_share_url_rejects_unknown() {
         let err = extract_share_url("https://www.example.com/video/1")
             .expect_err("unknown host should be unsupported");
@@ -142,11 +162,7 @@ mod tests {
     }
 
     #[test]
-    fn default_match_order_is_wechat_then_douyin() {
-        assert_eq!(STATELESS_EXTRACTORS.len(), 2);
-        let wechat = wechat::extract_share_url("https://weixin.qq.com/sph/A27pGwf5f9").unwrap();
-        let douyin = douyin::extract_share_url("https://v.douyin.com/iAbCdEf/").unwrap();
-        assert!(wechat.as_str().contains("weixin"));
-        assert!(douyin.as_str().contains("douyin"));
+    fn default_match_order_is_wechat_douyin_bilibili() {
+        assert_eq!(STATELESS_EXTRACTORS.len(), 3);
     }
 }

@@ -1,11 +1,12 @@
 use std::path::PathBuf;
 
+use tracing::Instrument;
 use url::Url;
 
 use crate::{
     Error, ResolvedPost, Result,
     media::MediaDownloader,
-    platforms::{self, DouyinResolver, Platform, WechatResolver},
+    platforms::{self, BilibiliResolver, DouyinResolver, Platform, WechatResolver},
 };
 
 /// Multi-platform facade; tries platforms in registration order.
@@ -37,6 +38,12 @@ impl ParseKitBuilder {
         Ok(self)
     }
 
+    pub fn bilibili(mut self) -> Result<Self> {
+        self.platforms
+            .push(Platform::Bilibili(BilibiliResolver::new()?));
+        Ok(self)
+    }
+
     pub fn platform(mut self, platform: Platform) -> Self {
         self.platforms.push(platform);
         self
@@ -58,6 +65,7 @@ impl ParseKit {
         Self::builder()
             .wechat(wechat_yuanbao_cookie)?
             .douyin()?
+            .bilibili()?
             .build()
     }
 
@@ -70,25 +78,47 @@ impl ParseKit {
     }
 
     pub async fn resolve_text(&self, input: &str) -> Result<ResolvedPost> {
-        for platform in &self.platforms {
-            match platform.extract_share_url(input) {
-                Ok(_) => return platform.resolve_text(input).await,
-                Err(Error::UnsupportedUrl) => {}
-                Err(error) => return Err(error),
+        let span = tracing::info_span!("parse_kit.resolve_text");
+        async move {
+            for platform in &self.platforms {
+                match platform.extract_share_url(input) {
+                    Ok(_) => {
+                        let id = platform.platform_id().as_str();
+                        return platform
+                            .resolve_text(input)
+                            .instrument(tracing::info_span!("platform.resolve", platform = id))
+                            .await;
+                    }
+                    Err(Error::UnsupportedUrl) => {}
+                    Err(error) => return Err(error),
+                }
             }
+            Err(Error::UnsupportedUrl)
         }
-        Err(Error::UnsupportedUrl)
+        .instrument(span)
+        .await
     }
 
     pub async fn resolve_url(&self, url: &Url) -> Result<ResolvedPost> {
-        for platform in &self.platforms {
-            match platform.extract_share_url(url.as_str()) {
-                Ok(_) => return platform.resolve_url(url).await,
-                Err(Error::UnsupportedUrl) => {}
-                Err(error) => return Err(error),
+        let span = tracing::info_span!("parse_kit.resolve_url");
+        async move {
+            for platform in &self.platforms {
+                match platform.extract_share_url(url.as_str()) {
+                    Ok(_) => {
+                        let id = platform.platform_id().as_str();
+                        return platform
+                            .resolve_url(url)
+                            .instrument(tracing::info_span!("platform.resolve", platform = id))
+                            .await;
+                    }
+                    Err(Error::UnsupportedUrl) => {}
+                    Err(error) => return Err(error),
+                }
             }
+            Err(Error::UnsupportedUrl)
         }
-        Err(Error::UnsupportedUrl)
+        .instrument(span)
+        .await
     }
 
     pub fn wechat(&self) -> Option<&WechatResolver> {
@@ -97,6 +127,10 @@ impl ParseKit {
 
     pub fn douyin(&self) -> Option<&DouyinResolver> {
         self.platforms.iter().find_map(Platform::as_douyin)
+    }
+
+    pub fn bilibili(&self) -> Option<&BilibiliResolver> {
+        self.platforms.iter().find_map(Platform::as_bilibili)
     }
 
     pub fn platforms(&self) -> &[Platform] {
@@ -110,7 +144,7 @@ impl ParseKit {
         workspace_dir: impl Into<PathBuf>,
         max_bytes: u64,
     ) -> Result<MediaDownloader> {
-        MediaDownloader::for_platform(post.platform.as_str(), workspace_dir, max_bytes)
+        MediaDownloader::for_platform(post.platform, workspace_dir, max_bytes)
     }
 }
 
@@ -133,7 +167,7 @@ mod tests {
     }
 
     #[test]
-    fn new_registers_wechat_then_douyin() {
+    fn new_registers_wechat_douyin_bilibili() {
         let hub = ParseKit::new("hy_user=test; token=test").unwrap();
         assert!(hub.wechat().is_some());
         assert!(hub.douyin().is_some());
@@ -142,7 +176,11 @@ mod tests {
                 .iter()
                 .map(Platform::platform_id)
                 .collect::<Vec<_>>(),
-            ["wechat_channels", "douyin"]
+            [
+                crate::PlatformId::WechatChannels,
+                crate::PlatformId::Douyin,
+                crate::PlatformId::Bilibili,
+            ]
         );
     }
 
@@ -154,7 +192,7 @@ mod tests {
 
         let kit = ParseKit::builder().douyin().unwrap().build().unwrap();
         let post = ResolvedPost::new_video(
-            "douyin",
+            crate::PlatformId::Douyin,
             "1",
             Url::parse("https://www.douyin.com/video/1").unwrap(),
             None,

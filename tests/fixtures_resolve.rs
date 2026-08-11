@@ -39,3 +39,14 @@ fn douyin_html_fixture_contains_router_marker() {
     assert!(html.contains("window._ROUTER_DATA"));
     assert!(html.contains("videoInfoRes"));
 }
+
+#[test]
+fn bilibili_fixtures_build_post() {
+    let view: serde_json::Value =
+        serde_json::from_str(include_str!("fixtures/bilibili/view.json")).unwrap();
+    let play: serde_json::Value =
+        serde_json::from_str(include_str!("fixtures/bilibili/playurl.json")).unwrap();
+    let post = parse_kit::bilibili::build_post_from_fixtures(&view, &play).unwrap();
+    assert_eq!(post.platform, parse_kit::PlatformId::Bilibili);
+    assert!(post.primary_video().is_some());
+}

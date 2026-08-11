@@ -21,7 +21,7 @@ async fn resolves_douyin_sample_url() {
         .await
         .unwrap_or_else(|error| panic!("douyin resolve failed: {error}"));
 
-    assert_eq!(post.platform, "douyin");
+    assert_eq!(post.platform, parse_kit::PlatformId::Douyin);
     assert!(!post.post_id.is_empty());
     assert_eq!(post.primary_video().unwrap().url.scheme(), "https");
     assert!(

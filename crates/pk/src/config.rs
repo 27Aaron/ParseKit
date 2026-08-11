@@ -20,6 +20,7 @@ pub fn build_kit() -> Result<ParseKit> {
         _ => {}
     }
     builder = builder.douyin()?;
+    builder = builder.bilibili()?;
     builder.build()
 }
 
