@@ -62,7 +62,18 @@ pub async fn download(
     Ok(())
 }
 
-pub fn platforms() {
-    println!("wechat_channels\t微信视频号\tneeds YUANBAO_COOKIE");
-    println!("douyin\t抖音\tpublic share page");
+pub fn platforms() -> Result<()> {
+    let kit = build_kit()?;
+    for platform in kit.platforms() {
+        println!(
+            "{}\t{}\t{}",
+            platform.platform_id(),
+            platform.display_name(),
+            platform.capability_note()
+        );
+    }
+    if kit.wechat().is_none() {
+        eprintln!("note: set YUANBAO_COOKIE to enable wechat_channels");
+    }
+    Ok(())
 }

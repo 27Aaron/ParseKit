@@ -1,0 +1,27 @@
+{
+  "loaderData": {
+    "video_(id)/page": {
+      "videoInfoRes": {
+        "status_code": 0,
+        "filter_list": [],
+        "item_list": [{
+          "aweme_id": "7123456789012345678",
+          "desc": "测试标题",
+          "video": {
+            "play_addr": {
+              "uri": "v0200fg10000abcdefgh",
+              "url_list": [
+                "https://aweme.snssdk.com/aweme/v1/playwm/?video_id=v0200fg10000abcdefgh&ratio=720p&line=0"
+              ],
+              "width": 720,
+              "height": 1280
+            },
+            "cover": {
+              "url_list": ["https://p3.douyinpic.com/cover.jpg"]
+            }
+          }
+        }]
+      }
+    }
+  }
+}

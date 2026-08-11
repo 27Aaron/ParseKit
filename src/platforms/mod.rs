@@ -1,8 +1,15 @@
 //! Platform resolvers.
 //!
-//! Add a platform: implement [`PlatformResolver`], add [`Platform`] variant,
-//! register in builder / [`STATELESS_EXTRACTORS`], wire
-//! [`crate::media::MediaDownloader::for_platform`].
+//! ## Adding a platform
+//!
+//! 1. Implement [`PlatformResolver`] under `platforms/<name>/`.
+//! 2. Add a [`Platform`] variant and match arms (`display_name`, `capability_note`, …).
+//! 3. Register on [`crate::ParseKitBuilder`]; optional entry in [`STATELESS_EXTRACTORS`].
+//! 4. Review media hosts and wire [`crate::media::MediaDownloader::for_platform`].
+//! 5. Unit + fixture tests; live tests stay `#[ignore]`.
+//! 6. Update README platform table.
+//!
+//! See repository README for the full checklist.
 
 use std::future::Future;
 
@@ -43,6 +50,22 @@ impl Platform {
         match self {
             Self::Wechat(resolver) => resolver.platform_id(),
             Self::Douyin(resolver) => resolver.platform_id(),
+        }
+    }
+
+    /// Short human label for CLI / logs.
+    pub fn display_name(&self) -> &'static str {
+        match self {
+            Self::Wechat(_) => "微信视频号",
+            Self::Douyin(_) => "抖音",
+        }
+    }
+
+    /// Optional capability note (credentials, limits).
+    pub fn capability_note(&self) -> &'static str {
+        match self {
+            Self::Wechat(_) => "needs YUANBAO_COOKIE",
+            Self::Douyin(_) => "public share page",
         }
     }
 

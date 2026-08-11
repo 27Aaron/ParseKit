@@ -25,14 +25,14 @@ async fn resolves_wechat_channels_sample() {
         "unexpected canonical share URL"
     );
     assert!(!post.post_id.trim().is_empty(), "missing post identifier");
-    assert_safe_media_source(&post.video);
+    assert_safe_media_source(post.primary_video().unwrap());
 
-    if post.video.provenance == MediaSourceKind::Derived {
+    if post.primary_video().unwrap().provenance == MediaSourceKind::Derived {
         assert!(
-            post.video.size_hint.is_none(),
+            post.primary_video().unwrap().size_hint.is_none(),
             "derived source must not reuse a candidate size hint"
         );
-        let query: Vec<_> = post.video.url.query_pairs().collect();
+        let query: Vec<_> = post.primary_video().unwrap().url.query_pairs().collect();
         assert!(query.len() == 2, "derived source query shape changed");
         assert!(
             query[0].0 == "encfilekey" && !query[0].1.is_empty(),
@@ -59,12 +59,12 @@ async fn downloads_decrypts_and_probes_wechat_channels_sample() {
     )
     .unwrap_or_else(|_| panic!("failed to initialize the live media downloader"));
     let downloaded = downloader
-        .download(&post.video)
+        .download(post.primary_video().unwrap())
         .await
         .unwrap_or_else(|_| panic!("live WeChat media download failed"));
 
     assert!(downloaded.bytes > 0, "downloaded media is empty");
-    if let Some(decode_key) = post.video.decode_key {
+    if let Some(decode_key) = post.primary_video().unwrap().decode_key {
         decrypt_file_prefix(&downloaded.path, decode_key)
             .await
             .unwrap_or_else(|_| panic!("live WeChat media decryption failed"));

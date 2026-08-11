@@ -1,0 +1,21 @@
+{
+  "errCode": 0,
+  "data": {
+    "feedInfo": {
+      "description": "测试视频",
+      "coverUrl": "https://finder.video.qq.com/cover.jpg",
+      "videoUrl": "https://finder.video.qq.com/generic.mp4?encfilekey=g&token=t&quality=normal",
+      "h264VideoInfo": {
+        "videoUrl": "https://finder.video.qq.com/h264.mp4?encfilekey=h&token=t&quality=hd",
+        "width": 1920,
+        "height": 1080,
+        "fileSize": "123456"
+      },
+      "h265VideoInfo": {
+        "videoUrl": "https://finder.video.qq.com/h265.mp4?encfilekey=x&token=t&quality=hd"
+      }
+    },
+    "authorInfo": {"nickname": "测试作者"},
+    "sceneInfo": {"expiredTime": 1893456000}
+  }
+}
