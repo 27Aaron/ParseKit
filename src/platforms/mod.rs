@@ -5,9 +5,9 @@
 //! 1. Add `platforms/<name>.rs` (or a subdirectory) with a concrete resolver.
 //! 2. Implement [`PlatformResolver`] for that type.
 //! 3. Add a variant to [`Platform`] and forward methods in its `impl`.
-//! 4. Register it via [`crate::ParseHub::builder`] (order is match order).
+//! 4. Register it via [`crate::ParseKit::builder`] (order is match order).
 //! 5. If the matcher is stateless, also list its free `extract_share_url` in
-//!    [`STATELESS_EXTRACTORS`] so [`crate::ParseHub::extract_share_url`] works
+//!    [`STATELESS_EXTRACTORS`] so [`crate::ParseKit::extract_share_url`] works
 //!    without a hub instance.
 //!
 //! Platform-private data (CDN hosts, cookies, decrypt) stays under that
@@ -29,14 +29,14 @@ pub use wechat::WechatResolver;
 /// Stateless URL matchers in default registration order (WeChat, then Douyin).
 ///
 /// This is the single source of truth for match order used by
-/// [`extract_share_url`] and documented for [`crate::ParseHub::builder`].
+/// [`extract_share_url`] and documented for [`crate::ParseKit::builder`].
 pub const STATELESS_EXTRACTORS: &[fn(&str) -> Result<Url>] =
     &[wechat::extract_share_url, douyin::extract_share_url];
 
 /// Contract every platform resolver implements.
 ///
 /// Implement this on a concrete type, then register it via [`Platform`] so
-/// [`crate::ParseHub`] can dispatch without product code changes.
+/// [`crate::ParseKit`] can dispatch without product code changes.
 pub trait PlatformResolver {
     /// Stable id written into [`ResolvedPost::platform`].
     fn platform_id(&self) -> &'static str;
@@ -107,7 +107,7 @@ impl Platform {
     }
 }
 
-/// Static extract without a [`crate::ParseHub`] instance.
+/// Static extract without a [`crate::ParseKit`] instance.
 pub fn extract_share_url(input: &str) -> Result<Url> {
     for extract in STATELESS_EXTRACTORS {
         match extract(input) {

@@ -1,6 +1,6 @@
 use std::{env, path::PathBuf, time::Duration};
 
-use parse_core::{
+use parse_kit::{
     media::{DownloadRequestIdentity, MediaDownloader, decrypt_file_prefix, probe_media},
     model::{MediaSource, MediaSourceKind, ResolvedPost},
     wechat::{REVIEWED_WECHAT_MEDIA_HOSTS, WechatResolver},
@@ -110,7 +110,7 @@ struct TestDirectory(PathBuf);
 impl TestDirectory {
     fn new() -> Self {
         let path = env::temp_dir().join(format!(
-            "parse-bot-wechat-live-{}",
+            "parse-kit-wechat-live-{}",
             Uuid::new_v4().hyphenated()
         ));
         std::fs::create_dir_all(&path)

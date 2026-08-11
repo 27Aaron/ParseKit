@@ -1,12 +1,12 @@
 [package]
-name = "parse-core"
+name = "parse-kit"
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.88"
 license = "MIT"
 publish = false
-description = "Multi-platform social media resolve and media download core"
-repository = "https://github.com/27Aaron/Parse"
+description = "Multi-platform social media parse and media download toolkit"
+repository = "https://github.com/27Aaron/ParseKit"
 readme = "README.md"
 
 [dependencies]

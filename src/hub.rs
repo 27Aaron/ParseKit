@@ -5,28 +5,28 @@ use crate::{
     platforms::{self, DouyinResolver, Platform, WechatResolver},
 };
 
-/// Multi-platform resolve facade.
+/// Multi-platform parse facade.
 ///
-/// Delivery apps (Telegram bot, Feishu bot, CLI) depend on this type rather than
-/// individual platform resolvers so new platforms can be registered here without
-/// touching product code.
+/// Delivery apps (bots, CLI, …) depend on this type rather than individual
+/// platform resolvers so new platforms can be registered here without touching
+/// product code.
 ///
-/// Platforms are tried in registration order (see [`ParseHubBuilder`]).
+/// Platforms are tried in registration order (see [`ParseKitBuilder`]).
 #[derive(Debug, Clone)]
-pub struct ParseHub {
+pub struct ParseKit {
     platforms: Vec<Platform>,
 }
 
-/// Builds a [`ParseHub`] with an explicit set of platforms.
+/// Builds a [`ParseKit`] with an explicit set of platforms.
 ///
-/// Default match order when using [`ParseHub::new`] is WeChat Channels, then
+/// Default match order when using [`ParseKit::new`] is WeChat Channels, then
 /// Douyin — the same order as [`platforms::STATELESS_EXTRACTORS`].
 #[derive(Debug, Default)]
-pub struct ParseHubBuilder {
+pub struct ParseKitBuilder {
     platforms: Vec<Platform>,
 }
 
-impl ParseHubBuilder {
+impl ParseKitBuilder {
     pub fn new() -> Self {
         Self::default()
     }
@@ -52,23 +52,23 @@ impl ParseHubBuilder {
     }
 
     /// Finish building. At least one platform must be registered.
-    pub fn build(self) -> Result<ParseHub> {
+    pub fn build(self) -> Result<ParseKit> {
         if self.platforms.is_empty() {
             return Err(Error::Config("至少注册一个解析平台".into()));
         }
-        Ok(ParseHub {
+        Ok(ParseKit {
             platforms: self.platforms,
         })
     }
 }
 
-impl ParseHub {
-    /// Build a hub with the platforms currently supported by this build.
+impl ParseKit {
+    /// Build a kit with the platforms currently supported by this build.
     ///
     /// Registration order is match order for share text and URLs:
     /// WeChat Channels, then Douyin (aligned with [`platforms::STATELESS_EXTRACTORS`]).
     ///
-    /// For Douyin-only (or custom sets), use [`ParseHub::builder`].
+    /// For Douyin-only (or custom sets), use [`ParseKit::builder`].
     pub fn new(wechat_yuanbao_cookie: impl Into<String>) -> Result<Self> {
         Self::builder()
             .wechat(wechat_yuanbao_cookie)?
@@ -77,13 +77,13 @@ impl ParseHub {
     }
 
     /// Start a custom platform registration (optional WeChat / Douyin / …).
-    pub fn builder() -> ParseHubBuilder {
-        ParseHubBuilder::new()
+    pub fn builder() -> ParseKitBuilder {
+        ParseKitBuilder::new()
     }
 
     /// Extract a supported share URL from free-form text, or reject early.
     ///
-    /// Uses the same platform matcher order as a fully constructed hub, but
+    /// Uses the same platform matcher order as a fully constructed kit, but
     /// does not require cookies or network clients.
     pub fn extract_share_url(input: &str) -> Result<Url> {
         platforms::extract_share_url(input)
@@ -133,13 +133,13 @@ mod tests {
 
     #[test]
     fn builder_requires_at_least_one_platform() {
-        let err = ParseHub::builder().build().unwrap_err();
+        let err = ParseKit::builder().build().unwrap_err();
         assert!(matches!(err, Error::Config(_)));
     }
 
     #[test]
     fn builder_can_register_douyin_only() {
-        let hub = ParseHub::builder().douyin().unwrap().build().unwrap();
+        let hub = ParseKit::builder().douyin().unwrap().build().unwrap();
         assert!(hub.wechat().is_none());
         assert!(hub.douyin().is_some());
         assert_eq!(hub.platforms().len(), 1);
@@ -147,7 +147,7 @@ mod tests {
 
     #[test]
     fn new_registers_wechat_then_douyin() {
-        let hub = ParseHub::new("hy_user=test; token=test").unwrap();
+        let hub = ParseKit::new("hy_user=test; token=test").unwrap();
         assert!(hub.wechat().is_some());
         assert!(hub.douyin().is_some());
         assert_eq!(

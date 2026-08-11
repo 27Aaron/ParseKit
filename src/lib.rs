@@ -1,12 +1,12 @@
-//! Multi-platform social media resolve and download core.
+//! Multi-platform social media parse and media download toolkit.
 //!
 //! This crate is delivery-agnostic: it does not know about Telegram, Feishu, or
-//! other chat products. Apps depend on [`ParseHub`] plus [`media`] helpers.
+//! other chat products. Apps depend on [`ParseKit`] plus [`media`] helpers.
 //!
 //! # Platforms
 //!
 //! Concrete resolvers live under [`platforms`]. Register new ones via the
-//! [`platforms::Platform`] enum and [`ParseHub::builder`] — see the module docs.
+//! [`platforms::Platform`] enum and [`ParseKit::builder`] — see the module docs.
 //!
 //! Platform-private pieces (CDN host allowlists, WeChat decrypt, cookies) stay
 //! under each platform module rather than shared `model` / `media`.
@@ -17,18 +17,18 @@ pub mod media;
 pub mod model;
 pub mod platforms;
 
-/// Backward-compatible path for WeChat Channels (`parse_core::wechat::…`).
+/// Backward-compatible path for WeChat Channels (`parse_kit::wechat::…`).
 pub mod wechat {
     pub use crate::platforms::wechat::*;
 }
 
-/// Convenience path for Douyin (`parse_core::douyin::…`).
+/// Convenience path for Douyin (`parse_kit::douyin::…`).
 pub mod douyin {
     pub use crate::platforms::douyin::*;
 }
 
 pub use error::{Error, Result};
-pub use hub::{ParseHub, ParseHubBuilder};
+pub use hub::{ParseKit, ParseKitBuilder};
 pub use model::{MediaSource, MediaSourceKind, ResolvedPost, VideoCodec};
 pub use platforms::{DouyinResolver, Platform, PlatformResolver, WechatResolver};
 

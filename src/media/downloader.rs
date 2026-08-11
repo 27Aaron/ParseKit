@@ -1341,7 +1341,7 @@ mod tests {
     #[tokio::test]
     async fn cleanup_is_idempotent() {
         let directory = std::env::temp_dir().join(format!(
-            "parse-bot-downloader-test-{}",
+            "parse-kit-downloader-test-{}",
             Uuid::new_v4().simple()
         ));
         std::fs::create_dir_all(&directory).unwrap();
@@ -1361,7 +1361,7 @@ mod tests {
     #[test]
     fn reports_each_crossed_threshold_once_after_writes() {
         let directory = std::env::temp_dir().join(format!(
-            "parse-bot-progress-test-{}",
+            "parse-kit-progress-test-{}",
             Uuid::new_v4().simple()
         ));
         std::fs::create_dir_all(&directory).unwrap();

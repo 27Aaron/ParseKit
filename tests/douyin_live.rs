@@ -8,7 +8,7 @@
 
 use std::env;
 
-use parse_core::platforms::DouyinResolver;
+use parse_kit::platforms::DouyinResolver;
 
 #[tokio::test]
 #[ignore = "requires DOUYIN_SAMPLE_URL and live Douyin endpoints"]
