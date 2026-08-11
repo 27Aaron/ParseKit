@@ -3,8 +3,9 @@
 use std::{path::PathBuf, time::Duration};
 
 use parse_kit::{
-    ContentKind, CredentialStatus, MediaSource, ResolvedPost, Result, media::MediaDownloader,
-    wechat::WechatCredentialStatus,
+    ContentKind, CredentialStatus, MediaSource, ResolvedPost, Result,
+    media::MediaDownloader,
+    wechat::{self, WechatCredentialStatus},
 };
 
 use crate::{
@@ -345,7 +346,7 @@ pub fn platforms(check: bool) -> Result<()> {
         );
     }
     if kit.wechat().is_none() {
-        ui::note("set YUANBAO_COOKIE to enable wechat");
+        ui::note("set YUANBAO_COOKIE or run: pk wechat login");
     }
     if kit
         .bilibili()
@@ -376,15 +377,20 @@ pub fn doctor() -> Result<()> {
 
 fn print_health(kit: &parse_kit::ParseKit) {
     match kit.wechat() {
-        None => ui::note("wechat disabled (no YUANBAO_COOKIE)"),
+        None => ui::note("wechat disabled (no YUANBAO_COOKIE; run: pk wechat login)"),
         Some(wechat) => match wechat.credential_status() {
             WechatCredentialStatus::Present => {
-                ui::ok("wechat", "cookie present (shape ok; not network-verified)")
+                ui::ok("wechat", "cookie present (shape ok; not network-verified)");
             }
-            WechatCredentialStatus::Incomplete => ui::err(
-                "wechat",
-                "cookie incomplete (missing hy_user/token markers)",
-            ),
+            WechatCredentialStatus::Incomplete => {
+                ui::err(
+                    "wechat",
+                    "cookie incomplete (missing hy_user/token markers)",
+                );
+            }
+            WechatCredentialStatus::Absent => {
+                ui::note("wechat cookie empty");
+            }
         },
     }
     if kit.douyin().is_some() {
@@ -409,6 +415,94 @@ fn print_health(kit: &parse_kit::ParseKit) {
             }
         },
     }
+}
+
+/// WeChat QR login → write `YUANBAO_COOKIE` into `.env.local`.
+///
+/// An explicit cookie argument remains available as a manual fallback.
+pub async fn wechat_login(cookie_arg: Option<String>) -> Result<()> {
+    if let Some(cookie) = cookie_arg {
+        let cookie = cookie.trim();
+        if cookie.is_empty() {
+            return Err(parse_kit::Error::Config("cookie 参数为空".into()));
+        }
+        return save_yuanbao_cookie(cookie);
+    }
+
+    ui::note("requesting Yuanbao WeChat QR login…");
+    let session = wechat::start_web_qr_login().await?;
+    print_yuanbao_qr(&session);
+
+    ui::note("open WeChat → scan → confirm");
+    ui::note("waiting for scan (timeout 180s)…");
+    let cookie =
+        wechat::wait_web_qr_login(&session, Duration::from_secs(1), Duration::from_secs(180))
+            .await?;
+    save_yuanbao_cookie(cookie.as_str())
+}
+
+fn save_yuanbao_cookie(cookie: &str) -> Result<()> {
+    match wechat::assess_yuanbao_cookie(cookie) {
+        CredentialStatus::Present => {}
+        CredentialStatus::Incomplete => {
+            ui::err(
+                "cookie",
+                "missing hy_user / token markers — save aborted (paste full Cookie header)",
+            );
+            return Err(parse_kit::Error::Config(
+                "YUANBAO_COOKIE 形态不完整，未写入".into(),
+            ));
+        }
+        CredentialStatus::Absent => {
+            return Err(parse_kit::Error::Config("cookie 为空".into()));
+        }
+    }
+
+    config::save_yuanbao_cookie(cookie)?;
+    let path = config::env_local_path();
+    ui::ok(
+        "login",
+        format!("saved YUANBAO_COOKIE to {}", path.display()),
+    );
+    ui::note("next `pk` in this dir loads .env.local automatically");
+    Ok(())
+}
+
+pub fn wechat_logout() -> Result<()> {
+    let removed = config::clear_yuanbao_cookie()?;
+    if removed {
+        ui::ok("logout", "removed YUANBAO_COOKIE from .env.local");
+    } else {
+        ui::note("no YUANBAO_COOKIE line in .env.local (process env cleared if set)");
+    }
+    Ok(())
+}
+
+pub fn wechat_status() -> Result<()> {
+    let kit = build_kit()?;
+    match kit.wechat() {
+        None => {
+            ui::note("wechat disabled — set YUANBAO_COOKIE or run: pk wechat login");
+        }
+        Some(wechat) => match wechat.credential_status() {
+            CredentialStatus::Present => {
+                ui::ok(
+                    "wechat",
+                    "logged in (hy_user/token present; not network-verified)",
+                );
+            }
+            CredentialStatus::Incomplete => {
+                ui::err(
+                    "wechat",
+                    "YUANBAO_COOKIE set but missing hy_user/token markers",
+                );
+            }
+            CredentialStatus::Absent => {
+                ui::note("wechat cookie empty");
+            }
+        },
+    }
+    Ok(())
 }
 
 /// Web QR login → write `BILIBILI_COOKIE` into `.env.local`.
@@ -494,4 +588,172 @@ fn render_terminal_qr(url: &str) -> std::result::Result<String, ()> {
         .dark_color(Dense1x2::Dark)
         .light_color(Dense1x2::Light)
         .build())
+}
+
+fn print_yuanbao_qr(session: &wechat::QrLoginSession) {
+    match render_terminal_qr_image(session.qrcode_image()) {
+        Ok(art) => {
+            println!();
+            println!("{art}");
+            println!();
+        }
+        Err(_) => {
+            ui::note(format!(
+                "terminal cannot render the QR image; open: {}",
+                session.qrcode_url()
+            ));
+        }
+    }
+}
+
+fn render_terminal_qr_image(image: &[u8]) -> std::result::Result<String, ()> {
+    use jpeg_decoder::{Decoder, PixelFormat};
+    use std::io::Cursor;
+
+    let mut decoder = Decoder::new(Cursor::new(image));
+    let pixels = decoder.decode().map_err(|_| ())?;
+    let info = decoder.info().ok_or(())?;
+    let width = usize::from(info.width);
+    let height = usize::from(info.height);
+    let luma = match info.pixel_format {
+        PixelFormat::L8 => pixels,
+        PixelFormat::RGB24 => pixels
+            .chunks_exact(3)
+            .map(|rgb| {
+                let value =
+                    u32::from(rgb[0]) * 299 + u32::from(rgb[1]) * 587 + u32::from(rgb[2]) * 114;
+                (value / 1000) as u8
+            })
+            .collect(),
+        _ => return Err(()),
+    };
+    render_terminal_qr_luma(&luma, width, height)
+}
+
+fn render_terminal_qr_luma(
+    pixels: &[u8],
+    width: usize,
+    height: usize,
+) -> std::result::Result<String, ()> {
+    const DARK_THRESHOLD: u8 = 128;
+
+    if width == 0 || width != height || pixels.len() != width.checked_mul(height).ok_or(())? {
+        return Err(());
+    }
+
+    let mut min_x = width;
+    let mut min_y = height;
+    for (index, value) in pixels.iter().enumerate() {
+        if *value < DARK_THRESHOLD {
+            min_x = min_x.min(index % width);
+            min_y = min_y.min(index / width);
+        }
+    }
+    if min_x == width || min_y == height {
+        return Err(());
+    }
+
+    let row = &pixels[min_y * width..(min_y + 1) * width];
+    let mut runs = Vec::new();
+    let mut current_dark = row[0] < DARK_THRESHOLD;
+    let mut current_len = 1usize;
+    for value in &row[1..] {
+        let dark = *value < DARK_THRESHOLD;
+        if dark == current_dark {
+            current_len += 1;
+        } else {
+            runs.push(current_len);
+            current_dark = dark;
+            current_len = 1;
+        }
+    }
+    runs.push(current_len);
+
+    let module_size = runs
+        .into_iter()
+        .filter(|length| *length >= 2)
+        .reduce(greatest_common_divisor)
+        .filter(|size| *size >= 2 && width.is_multiple_of(*size))
+        .ok_or(())?;
+    let modules = width / module_size;
+    let quiet_modules = (min_x / module_size).min(min_y / module_size);
+    let code_modules = modules
+        .checked_sub(quiet_modules.checked_mul(2).ok_or(())?)
+        .ok_or(())?;
+    if !(21..=177).contains(&code_modules) || (code_modules - 21) % 4 != 0 {
+        return Err(());
+    }
+
+    let mut matrix = vec![false; modules * modules];
+    let cell_area = module_size * module_size;
+    for cell_y in 0..modules {
+        for cell_x in 0..modules {
+            let mut dark_pixels = 0usize;
+            for y in cell_y * module_size..(cell_y + 1) * module_size {
+                for x in cell_x * module_size..(cell_x + 1) * module_size {
+                    dark_pixels += usize::from(pixels[y * width + x] < DARK_THRESHOLD);
+                }
+            }
+            matrix[cell_y * modules + cell_x] = dark_pixels * 2 >= cell_area;
+        }
+    }
+
+    let mut art = String::new();
+    for y in (0..modules).step_by(2) {
+        for x in 0..modules {
+            let top = matrix[y * modules + x];
+            let bottom = y + 1 < modules && matrix[(y + 1) * modules + x];
+            art.push(match (top, bottom) {
+                (false, false) => ' ',
+                (true, false) => '▀',
+                (false, true) => '▄',
+                (true, true) => '█',
+            });
+        }
+        if y + 2 < modules {
+            art.push('\n');
+        }
+    }
+    Ok(art)
+}
+
+fn greatest_common_divisor(mut left: usize, mut right: usize) -> usize {
+    while right != 0 {
+        let remainder = left % right;
+        left = right;
+        right = remainder;
+    }
+    left
+}
+
+#[cfg(test)]
+mod qr_image_tests {
+    use super::*;
+
+    #[test]
+    fn renders_sampled_qr_grid() {
+        let module_size = 2;
+        let modules = 47;
+        let width = module_size * modules;
+        let mut pixels = vec![255; width * width];
+        for module_y in 3..44 {
+            for module_x in 3..44 {
+                for y in module_y * module_size..(module_y + 1) * module_size {
+                    for x in module_x * module_size..(module_x + 1) * module_size {
+                        pixels[y * width + x] = 0;
+                    }
+                }
+            }
+        }
+
+        let art = render_terminal_qr_luma(&pixels, width, width).unwrap();
+        assert_eq!(art.lines().count(), 24);
+        assert!(art.contains('█'));
+    }
+
+    #[test]
+    fn rejects_non_qr_grid_dimensions() {
+        let pixels = vec![0; 40 * 40];
+        assert!(render_terminal_qr_luma(&pixels, 40, 40).is_err());
+    }
 }

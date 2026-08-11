@@ -1,9 +1,6 @@
 //! Network orchestration for WeChat Channels links.
 
-use std::{
-    sync::Arc,
-    time::{Duration, SystemTime, UNIX_EPOCH},
-};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use reqwest::{
     Client,
@@ -15,6 +12,7 @@ use uuid::Uuid;
 
 use crate::{
     Error, ResolvedPost, Result,
+    auth::{CookieCredential, CredentialStatus},
     platforms::{
         PlatformResolver, PlatformSpec,
         util::{DEFAULT_RESOLVE_TIMEOUT, resolve_with_timeout, resolver_http_client},
@@ -50,7 +48,7 @@ const RESOLVE_TIMEOUT: Duration = DEFAULT_RESOLVE_TIMEOUT;
 #[derive(Clone)]
 pub struct WechatResolver {
     client: Client,
-    cookie: Arc<str>,
+    cookie: CookieCredential,
     parse_endpoint: Url,
     feed_endpoint: Url,
     timeout: Duration,
@@ -60,20 +58,16 @@ impl std::fmt::Debug for WechatResolver {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
             .debug_struct("WechatResolver")
-            .field("cookie", &"<redacted>")
+            .field("cookie", &self.cookie)
             .field("endpoints", &"<redacted>")
             .finish_non_exhaustive()
     }
 }
 
-/// A local assessment of whether a Yuanbao cookie contains session markers.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum WechatCredentialStatus {
-    /// No recognized session marker is present.
-    Incomplete,
-    /// At least one marker is present; upstream may still reject the cookie.
-    Present,
-}
+/// Local assessment of Yuanbao cookie markers.
+///
+/// Prefer [`CredentialStatus`] for new code; this alias keeps older call sites working.
+pub type WechatCredentialStatus = CredentialStatus;
 
 impl WechatResolver {
     pub fn new(cookie: impl Into<String>) -> Result<Self> {
@@ -84,18 +78,13 @@ impl WechatResolver {
         )
     }
 
-    /// Checks cookie structure without network access or logging cookie values.
-    pub fn credential_status(&self) -> WechatCredentialStatus {
-        let has_user = cookie_value(&self.cookie, "hy_user").is_some();
-        let has_session = cookie_value(&self.cookie, "token").is_some()
-            || cookie_value(&self.cookie, "hy_token").is_some()
-            || cookie_value(&self.cookie, "yuanbao_token").is_some()
-            || self.cookie.contains("hy_user=");
-        if has_user || has_session {
-            WechatCredentialStatus::Present
-        } else {
-            WechatCredentialStatus::Incomplete
-        }
+    /// Local cookie shape check (no network).
+    ///
+    /// Returns [`CredentialStatus::Present`] when `hy_user` / session tokens look set;
+    /// [`CredentialStatus::Incomplete`] otherwise. Never returns `Absent` (resolver always
+    /// holds a cookie string).
+    pub fn credential_status(&self) -> CredentialStatus {
+        assess_yuanbao_cookie(self.cookie.as_str())
     }
 
     fn with_endpoints(
@@ -104,10 +93,8 @@ impl WechatResolver {
         feed_endpoint: Url,
     ) -> Result<Self> {
         let timeout = RESOLVE_TIMEOUT;
-        let cookie = cookie.into();
-        if cookie.trim().is_empty() {
-            return Err(Error::Config("YUANBAO_COOKIE 不能为空".into()));
-        }
+        let cookie = CookieCredential::new(cookie)
+            .ok_or_else(|| Error::Config("YUANBAO_COOKIE 不能为空".into()))?;
         for endpoint in [&parse_endpoint, &feed_endpoint] {
             if endpoint.scheme() != "https" && !endpoint_is_loopback_http(endpoint) {
                 return Err(Error::Config("视频号解析 endpoint 必须使用 HTTPS".into()));
@@ -118,11 +105,16 @@ impl WechatResolver {
 
         Ok(Self {
             client,
-            cookie: Arc::from(cookie),
+            cookie,
             parse_endpoint,
             feed_endpoint,
             timeout,
         })
+    }
+
+    /// Cookie header value for outbound requests (redacted in Debug).
+    pub fn cookie_header(&self) -> &str {
+        self.cookie.as_str()
     }
 
     pub async fn resolve_text(&self, input: &str) -> Result<ResolvedPost> {
@@ -190,13 +182,13 @@ impl WechatResolver {
             .header("x-webdriver", "0")
             .header("x-webversion", "2.69.0")
             .header("x-ybuitest", "0")
-            .header(COOKIE, self.cookie.as_ref())
+            .header(COOKIE, self.cookie.as_str())
             .json(&payload);
 
-        if let Some(user_id) = cookie_value(&self.cookie, "hy_user") {
+        if let Some(user_id) = cookie_value(self.cookie.as_str(), "hy_user") {
             request = request.header("t-userid", &user_id).header("x-id", user_id);
         }
-        if let Some(device_id) = cookie_value(&self.cookie, "_qimei_uuid42") {
+        if let Some(device_id) = cookie_value(self.cookie.as_str(), "_qimei_uuid42") {
             request = request
                 .header("x-device-id", &device_id)
                 .header("x-hy93", device_id);
@@ -298,6 +290,24 @@ impl WechatResolver {
             };
         }
         Ok(value)
+    }
+}
+
+/// Local shape check for a Yuanbao cookie header (no network).
+pub fn assess_yuanbao_cookie(cookie: &str) -> CredentialStatus {
+    let trimmed = cookie.trim();
+    if trimmed.is_empty() {
+        return CredentialStatus::Absent;
+    }
+    let has_user = cookie_value(trimmed, "hy_user").is_some();
+    let has_session = cookie_value(trimmed, "token").is_some()
+        || cookie_value(trimmed, "hy_token").is_some()
+        || cookie_value(trimmed, "yuanbao_token").is_some()
+        || trimmed.contains("hy_user=");
+    if has_user || has_session {
+        CredentialStatus::Present
+    } else {
+        CredentialStatus::Incomplete
     }
 }
 

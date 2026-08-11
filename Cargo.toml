@@ -11,7 +11,13 @@ readme = "README.md"
 
 [features]
 default = ["cli"]
-cli = ["dep:clap", "dep:dotenvy", "dep:tracing-subscriber", "dep:qrcode"]
+cli = [
+    "dep:clap",
+    "dep:dotenvy",
+    "dep:jpeg-decoder",
+    "dep:qrcode",
+    "dep:tracing-subscriber",
+]
 
 [[bin]]
 name = "pk"
@@ -21,10 +27,11 @@ required-features = ["cli"]
 [dependencies]
 clap = { version = "4", features = ["derive", "env"], optional = true }
 dotenvy = { version = "0.15", optional = true }
+jpeg-decoder = { version = "0.3", optional = true }
 qrcode = { version = "0.14", default-features = false, optional = true }
 libc = "0.2"
 regex = "1"
-reqwest = { version = "0.13", default-features = false, features = ["json", "rustls"] }
+reqwest = { version = "0.13", default-features = false, features = ["cookies", "json", "rustls"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"

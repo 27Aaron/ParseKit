@@ -12,7 +12,7 @@ use std::process::ExitCode;
 
 use clap::Parser;
 
-use self::args::{BilibiliCmd, Cli, Commands};
+use self::args::{BilibiliCmd, Cli, Commands, WechatCmd};
 
 fn main() -> ExitCode {
     config::load_dotenv();
@@ -48,6 +48,11 @@ fn main() -> ExitCode {
                 BilibiliCmd::Login => commands::bilibili_login().await,
                 BilibiliCmd::Logout => commands::bilibili_logout(),
                 BilibiliCmd::Status => commands::bilibili_status(),
+            },
+            Commands::Wechat { command } => match command {
+                WechatCmd::Login { cookie } => commands::wechat_login(cookie).await,
+                WechatCmd::Logout => commands::wechat_logout(),
+                WechatCmd::Status => commands::wechat_status(),
             },
         }
     });

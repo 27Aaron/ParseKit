@@ -11,9 +11,13 @@ just resolve '分享链接'
 just download '分享链接'
 ```
 
-微信视频号需要 `YUANBAO_COOKIE`（见 `.env.example`）。
+凭据（写入 `.env.local`，也可用手写 `.env`）：
 
-B 站可选登录以解锁更高清晰度：在 `.env` / `.env.local` 设置 `BILIBILI_COOKIE`，或运行 `pk bilibili login` 扫码（会写入 `.env.local`）。
+```bash
+pk wechat login              # 微信扫码 → YUANBAO_COOKIE
+pk bilibili login            # 扫码 → BILIBILI_COOKIE（更高清晰度）
+pk wechat status && pk bilibili status
+```
 
 新增平台时使用[统一适配器模板](./docs/adding-platform.md)。
 

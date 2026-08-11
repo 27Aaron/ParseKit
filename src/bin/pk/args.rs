@@ -73,6 +73,11 @@ pub enum Commands {
         #[command(subcommand)]
         command: BilibiliCmd,
     },
+    /// WeChat Channels helpers (Yuanbao cookie).
+    Wechat {
+        #[command(subcommand)]
+        command: WechatCmd,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -82,5 +87,20 @@ pub enum BilibiliCmd {
     /// Remove `BILIBILI_COOKIE` from `.env.local` and the current process.
     Logout,
     /// Show whether a Bilibili cookie is loaded (local shape only).
+    Status,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum WechatCmd {
+    /// Scan a QR code with WeChat; save the Yuanbao cookie to `.env.local`.
+    ///
+    /// Passing a cookie explicitly keeps the manual fallback available.
+    Login {
+        /// Optional full Cookie header value; omit it to use QR login.
+        cookie: Option<String>,
+    },
+    /// Remove `YUANBAO_COOKIE` from `.env.local` and the current process.
+    Logout,
+    /// Show whether a Yuanbao cookie is loaded (local shape only).
     Status,
 }

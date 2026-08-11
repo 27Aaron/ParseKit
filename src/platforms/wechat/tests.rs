@@ -135,6 +135,24 @@ fn parses_cookie_without_logging_or_decoding_it() {
 }
 
 #[test]
+fn assess_yuanbao_cookie_detects_markers() {
+    use crate::{CredentialStatus, platforms::wechat::assess_yuanbao_cookie};
+
+    assert_eq!(assess_yuanbao_cookie(""), CredentialStatus::Absent);
+    assert_eq!(
+        assess_yuanbao_cookie("foo=bar; baz=1"),
+        CredentialStatus::Incomplete
+    );
+    assert_eq!(
+        assess_yuanbao_cookie("hy_user=u1; hy_token=t1"),
+        CredentialStatus::Present
+    );
+    let resolver =
+        super::WechatResolver::new("hy_user=u; token=t").expect("cookie with markers should build");
+    assert_eq!(resolver.credential_status(), CredentialStatus::Present);
+}
+
+#[test]
 fn builds_post_from_feed_fixture_and_derives_media_from_preferred_h264_seed() {
     let normalized = NormalizedShareUrl {
         share_id: "AzJ7CGPYWD".to_owned(),
