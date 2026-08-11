@@ -2,7 +2,7 @@ use url::Url;
 
 use crate::{
     Error, ResolvedPost, Result,
-    platforms::{self, Platform, WechatResolver},
+    platforms::{self, DouyinResolver, Platform, WechatResolver},
 };
 
 /// Multi-platform resolve facade.
@@ -20,12 +20,14 @@ pub struct ParseHub {
 impl ParseHub {
     /// Build a hub with the platforms currently supported by this build.
     ///
-    /// Registration order is match order for share text and URLs.
+    /// Registration order is match order for share text and URLs:
+    /// WeChat Channels, then Douyin.
     pub fn new(wechat_yuanbao_cookie: impl Into<String>) -> Result<Self> {
         Ok(Self {
-            platforms: vec![Platform::Wechat(WechatResolver::new(
-                wechat_yuanbao_cookie,
-            )?)],
+            platforms: vec![
+                Platform::Wechat(WechatResolver::new(wechat_yuanbao_cookie)?),
+                Platform::Douyin(DouyinResolver::new()?),
+            ],
         })
     }
 
@@ -65,6 +67,14 @@ impl ParseHub {
             .iter()
             .find_map(Platform::as_wechat)
             .expect("WeChat Channels is always registered in ParseHub::new")
+    }
+
+    /// Access the Douyin resolver for platform-specific configuration/tests.
+    pub fn douyin(&self) -> &DouyinResolver {
+        self.platforms
+            .iter()
+            .find_map(Platform::as_douyin)
+            .expect("Douyin is always registered in ParseHub::new")
     }
 
     /// Registered platforms in match order (for tests / introspection).
