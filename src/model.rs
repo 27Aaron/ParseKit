@@ -35,6 +35,18 @@ impl PlatformId {
         }
     }
 
+    /// Short tag used in download filenames (not the public API id).
+    ///
+    /// WeChat Channels uses `wechat_sph` (share path `/sph/…`) instead of the
+    /// longer serialized id `wechat_channels`.
+    pub const fn file_tag(self) -> &'static str {
+        match self {
+            Self::WechatChannels => "wechat_sph",
+            Self::Douyin => "douyin",
+            Self::Bilibili => "bilibili",
+        }
+    }
+
     pub const fn display_name(self) -> &'static str {
         match self {
             Self::WechatChannels => "微信视频号",
@@ -286,6 +298,62 @@ impl ResolvedPost {
     pub fn display_title_or(&self, fallback: &str) -> String {
         format_title(self.title.as_deref(), fallback)
     }
+
+    /// Stable download basename (no extension): `{file_tag}_{canonical_slug}`.
+    ///
+    /// The slug is the last non-empty path segment of [`Self::canonical_url`]
+    /// (e.g. `ArPbCgE03d` from `https://weixin.qq.com/sph/ArPbCgE03d`), so the
+    /// name stays short and maps back to the share link. Falls back to a
+    /// sanitized [`Self::post_id`] when the URL has no usable path segment.
+    ///
+    /// WeChat Channels uses the short tag `wechat_sph` (not `wechat_channels`).
+    pub fn download_file_stem(&self) -> String {
+        download_file_stem(self.platform, &self.canonical_url, &self.post_id)
+    }
+}
+
+/// Builds `{file_tag}_{slug}` for download filenames.
+pub fn download_file_stem(platform: PlatformId, canonical_url: &Url, post_id: &str) -> String {
+    let from_canonical = canonical_url
+        .path_segments()
+        .into_iter()
+        .flatten()
+        .filter(|segment| !segment.is_empty())
+        .next_back();
+    let slug = sanitize_filename_component(from_canonical.unwrap_or(post_id));
+    let slug = if slug.is_empty() {
+        sanitize_filename_component(post_id)
+    } else {
+        slug
+    };
+    let slug = if slug.is_empty() {
+        "media".to_owned()
+    } else {
+        slug
+    };
+    format!("{}_{slug}", platform.file_tag())
+}
+
+/// Keeps only characters that are safe and portable in a single path component.
+pub(crate) fn sanitize_filename_component(raw: &str) -> String {
+    let mut out = String::with_capacity(raw.len().min(120));
+    for ch in raw.chars().take(120) {
+        match ch {
+            'a'..='z' | 'A'..='Z' | '0'..='9' | '-' | '_' => out.push(ch),
+            _ => {
+                if !out.ends_with('_') {
+                    out.push('_');
+                }
+            }
+        }
+    }
+    while out.ends_with('_') {
+        out.pop();
+    }
+    while out.starts_with('_') {
+        out.remove(0);
+    }
+    out
 }
 
 #[cfg(test)]
@@ -302,6 +370,46 @@ mod tests {
             size_hint: None,
             decode_key: None,
         }
+    }
+
+    #[test]
+    fn download_file_stem_uses_platform_and_canonical_path_slug() {
+        let post = ResolvedPost::new_video(
+            PlatformId::WechatChannels,
+            "export/UzFfBgAAxN6nSDBBUACfjMzT4DCgIrzfaAMsA2Z5MZdjdIWLCi-NdGBi-Q",
+            Url::parse("https://weixin.qq.com/sph/ArPbCgE03d").unwrap(),
+            Some("免费领强力道具！零氪也能当大佬！".into()),
+            None,
+            sample_source("v.mp4"),
+            Vec::new(),
+        );
+        assert_eq!(post.download_file_stem(), "wechat_sph_ArPbCgE03d");
+
+        assert_eq!(
+            download_file_stem(
+                PlatformId::Douyin,
+                &Url::parse("https://www.douyin.com/video/7123456789012345678").unwrap(),
+                "7123456789012345678",
+            ),
+            "douyin_7123456789012345678"
+        );
+        assert_eq!(
+            download_file_stem(
+                PlatformId::Bilibili,
+                &Url::parse("https://www.bilibili.com/video/BV1xx411c7mD").unwrap(),
+                "170001",
+            ),
+            "bilibili_BV1xx411c7mD"
+        );
+    }
+
+    #[test]
+    fn sanitize_filename_component_strips_path_separators() {
+        assert_eq!(
+            sanitize_filename_component("export/UzFf-BgAA"),
+            "export_UzFf-BgAA"
+        );
+        assert_eq!(sanitize_filename_component("___"), "");
     }
 
     #[test]
