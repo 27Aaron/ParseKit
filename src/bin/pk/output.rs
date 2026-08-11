@@ -2,19 +2,24 @@
 
 use parse_kit::{Error, MediaSource, MediaSourceKind, ResolvedPost, Result, VideoCodec};
 
+use crate::ui;
+
+const LABEL_WIDTH: usize = 10;
+
 pub fn print_post_summary(post: &ResolvedPost) {
-    println!("platform:  {}", post.platform);
-    println!("post_id:   {}", post.post_id);
-    println!("title:     {}", post.display_title());
-    println!("kind:      {:?}", post.kind);
-    println!("canonical: {}", post.canonical_url);
-    println!("sources:");
+    kv("platform", post.platform.to_string());
+    kv("post_id", &post.post_id);
+    kv("title", ui::one_line(&post.display_title(), 100));
+    kv("kind", format!("{:?}", post.kind));
+    kv("canonical", post.canonical_url.as_str());
+
+    println!("  {:LABEL_WIDTH$}", "sources");
     for (index, source) in post.media_sources().enumerate() {
-        let mark = if index == 0 { " *" } else { "" };
+        let mark = if index == 0 { "*" } else { " " };
         println!(
-            "  [{index}] {}{}  {}  {}  {}  decode_key={}",
+            "  {:LABEL_WIDTH$}  [{index}] {mark}  {:<8}  {:>10}  {:>8}  {:<8}  key={}",
+            "",
             source_kind_label(source),
-            mark,
             format_dims(source),
             format_size(source),
             format_codec(source.codec),
@@ -24,11 +29,15 @@ pub fn print_post_summary(post: &ResolvedPost) {
                 "no"
             },
         );
-        println!("       {}", source.url);
+        println!("  {:LABEL_WIDTH$}      {}", "", source.url);
     }
     if post.media_sources().count() > 1 {
-        println!("hint:     download --source N  or  --prefer smallest");
+        kv("hint", "download --source N  or  --prefer smallest");
     }
+}
+
+fn kv(label: &str, value: impl AsRef<str>) {
+    println!("  {label:<LABEL_WIDTH$}  {}", value.as_ref());
 }
 
 pub fn print_post_json(post: &ResolvedPost) -> Result<()> {
@@ -85,11 +94,7 @@ fn format_dims(source: &MediaSource) -> String {
 
 fn format_size(source: &MediaSource) -> String {
     match source.size_hint {
-        Some(bytes) if bytes >= 1024 * 1024 => {
-            format!("{:.1}MB", bytes as f64 / (1024.0 * 1024.0))
-        }
-        Some(bytes) if bytes >= 1024 => format!("{}KB", bytes / 1024),
-        Some(bytes) => format!("{bytes}B"),
+        Some(bytes) => ui::format_bytes(bytes),
         None => "-".into(),
     }
 }
