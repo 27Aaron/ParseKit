@@ -259,8 +259,7 @@ impl MediaDownloader {
     }
 
     pub async fn download(&self, source: &MediaSource) -> Result<DownloadedMedia> {
-        self.download_url_with_callback(&source.url, source.size_hint, None, source.decode_key)
-            .await
+        self.download_source_with_callback(source, None).await
     }
 
     pub async fn download_url(&self, url: &Url) -> Result<DownloadedMedia> {
@@ -313,12 +312,7 @@ impl MediaDownloader {
                     has_decode_key = source.decode_key.is_some()
                 );
                 match self
-                    .download_url_with_callback(
-                        &source.url,
-                        source.size_hint,
-                        None,
-                        source.decode_key,
-                    )
+                    .download_source_with_callback(source, None)
                     .instrument(attempt)
                     .await
                 {
@@ -359,11 +353,20 @@ impl MediaDownloader {
     where
         F: Fn(DownloadProgress) + Send + Sync + 'static,
     {
+        self.download_source_with_callback(source, Some(Arc::new(on_progress)))
+            .await
+    }
+
+    async fn download_source_with_callback(
+        &self,
+        source: &MediaSource,
+        progress_callback: Option<ProgressCallback>,
+    ) -> Result<DownloadedMedia> {
         self.download_url_with_callback(
             &source.url,
             source.size_hint,
-            Some(Arc::new(on_progress)),
-            None,
+            progress_callback,
+            source.decode_key,
         )
         .await
     }
