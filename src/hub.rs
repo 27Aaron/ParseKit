@@ -135,12 +135,16 @@ impl ParseKit {
     }
 
     /// Creates a downloader restricted to the resolved post's platform hosts.
+    ///
+    /// File names use `{file_tag}_{canonical_slug}.{ext}` (e.g.
+    /// `wechat_sph_ArPbCgE03d.mp4`) so the path maps back to the share link.
     pub fn media_downloader_for(
         &self,
         post: &ResolvedPost,
         workspace_dir: impl Into<PathBuf>,
     ) -> Result<MediaDownloader> {
-        MediaDownloader::for_platform(post.platform, workspace_dir)
+        Ok(MediaDownloader::for_platform(post.platform, workspace_dir)?
+            .with_file_stem(post.download_file_stem()))
     }
 }
 
@@ -213,6 +217,7 @@ mod tests {
                 .iter()
                 .any(|h| { h.contains("douyin") || h.contains("snssdk") || h.starts_with('.') })
         );
+        assert_eq!(downloader.file_stem(), Some("douyin_1"));
     }
 
     #[test]
