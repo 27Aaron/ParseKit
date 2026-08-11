@@ -3,7 +3,7 @@
 use url::Url;
 
 /// Defines the query parameters preserved during URL cleanup.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct CleanPolicy {
     /// Query parameter names to preserve, matched case-insensitively.
     pub reserved: &'static [&'static str],
@@ -28,30 +28,22 @@ pub fn clean_tracking_params(url: &Url, policy: CleanPolicy) -> Url {
     let mut cleaned = url.clone();
     cleaned.set_fragment(None);
 
-    let pairs: Vec<(String, String)> = cleaned
-        .query_pairs()
-        .filter(|(key, _)| {
-            let key = key.as_ref();
-            if policy
+    if url.query().is_some() {
+        let mut pairs = url.query_pairs().filter(|(key, _)| {
+            policy
                 .reserved
                 .iter()
                 .any(|reserved| key.eq_ignore_ascii_case(reserved))
-            {
-                return true;
-            }
-            !is_tracking_key(key)
-        })
-        .map(|(k, v)| (k.into_owned(), v.into_owned()))
-        .collect();
+                || !is_tracking_key(key.as_ref())
+        });
 
-    cleaned.set_query(None);
-    if pairs.is_empty() {
-        return cleaned;
-    }
-    {
-        let mut serializer = cleaned.query_pairs_mut();
-        for (key, value) in pairs {
+        cleaned.set_query(None);
+        if let Some((key, value)) = pairs.next() {
+            let mut serializer = cleaned.query_pairs_mut();
             serializer.append_pair(&key, &value);
+            for (key, value) in pairs {
+                serializer.append_pair(&key, &value);
+            }
         }
     }
     cleaned
@@ -64,31 +56,38 @@ pub fn strip_fragment(url: &Url) -> Url {
 }
 
 fn is_tracking_key(key: &str) -> bool {
-    let key = key.to_ascii_lowercase();
-    key.starts_with("utm_")
-        || key.starts_with("spm")
-        || matches!(
-            key.as_str(),
-            "from"
-                | "isappinstalled"
-                | "scene"
-                | "share_source"
-                | "share_medium"
-                | "share_plat"
-                | "share_tag"
-                | "share_session_id"
-                | "tt_from"
-                | "u_code"
-                | "timestamp"
-                | "mid"
-                | "vd_source"
-                | "feature"
-                | "refer"
-                | "referer"
-                | "source"
-                | "ft"
-                | "unique_k"
-        )
+    const EXACT_TRACKING_KEYS: &[&str] = &[
+        "from",
+        "isappinstalled",
+        "scene",
+        "share_source",
+        "share_medium",
+        "share_plat",
+        "share_tag",
+        "share_session_id",
+        "tt_from",
+        "u_code",
+        "timestamp",
+        "mid",
+        "vd_source",
+        "feature",
+        "refer",
+        "referer",
+        "source",
+        "ft",
+        "unique_k",
+    ];
+
+    key.as_bytes()
+        .get(..4)
+        .is_some_and(|prefix| prefix.eq_ignore_ascii_case(b"utm_"))
+        || key
+            .as_bytes()
+            .get(..3)
+            .is_some_and(|prefix| prefix.eq_ignore_ascii_case(b"spm"))
+        || EXACT_TRACKING_KEYS
+            .iter()
+            .any(|tracking| key.eq_ignore_ascii_case(tracking))
 }
 
 #[cfg(test)]
@@ -114,5 +113,25 @@ mod tests {
         .unwrap();
         let cleaned = clean_tracking_params(&raw, CleanPolicy::SHARE_PAGE);
         assert_eq!(cleaned.query(), Some("spm_id_from=333"));
+    }
+
+    #[test]
+    fn matching_is_case_insensitive_and_preserves_pair_order() {
+        let raw = Url::parse(
+            "https://example.com/watch?keep=1&UTM_Source=copy&TOKEN=a&TOKEN=b&SpM=x#details",
+        )
+        .unwrap();
+        let cleaned = clean_tracking_params(&raw, CleanPolicy::MEDIA_SIGNED);
+
+        assert_eq!(cleaned.query(), Some("keep=1&TOKEN=a&TOKEN=b"));
+        assert!(cleaned.fragment().is_none());
+    }
+
+    #[test]
+    fn empty_result_removes_the_query_delimiter() {
+        let raw = Url::parse("https://example.com/watch?utm_source=copy#details").unwrap();
+        let cleaned = clean_tracking_params(&raw, CleanPolicy::EMPTY);
+
+        assert_eq!(cleaned.as_str(), "https://example.com/watch");
     }
 }

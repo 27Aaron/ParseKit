@@ -1,6 +1,17 @@
-use parse_kit::{PlatformId, bilibili::BilibiliResolver};
+use parse_kit::{
+    PlatformId,
+    bilibili::{BilibiliResolver, extract_share_url},
+};
 
 const SAMPLE_SHARE: &str = "https://www.bilibili.com/video/BV1GJ411x7h7";
+
+#[test]
+fn extracts_bilibili_share_text_without_network_access() {
+    let url = extract_share_url(&format!("看看 {SAMPLE_SHARE}?utm_source=copy 这个"))
+        .expect("Bilibili URL extraction");
+
+    assert_eq!(url.as_str(), SAMPLE_SHARE);
+}
 
 #[tokio::test]
 #[ignore = "requires network access to Bilibili"]

@@ -5,7 +5,7 @@
 //! - via `Set-Cookie` on the poll response / after GET of the success URL
 //!   (current passport flow returns `ticket` + `gourl` and sets cookies on fetch).
 
-use std::time::Duration;
+use std::{sync::OnceLock, time::Duration};
 
 use reqwest::{
     Client,
@@ -94,9 +94,13 @@ pub async fn start_web_qr_login() -> Result<QrLoginSession> {
     let url = data
         .get("url")
         .and_then(Value::as_str)
-        .filter(|s| !s.is_empty())
+        .filter(|s| !s.is_empty() && s.len() <= 4_096)
         .ok_or(Error::UpstreamChanged)?
         .to_owned();
+    let parsed_url = Url::parse(&url).map_err(|_| Error::UpstreamChanged)?;
+    if !is_allowed_bilibili_url(&parsed_url) {
+        return Err(Error::UpstreamChanged);
+    }
     let qrcode_key = data
         .get("qrcode_key")
         .and_then(Value::as_str)
@@ -104,14 +108,18 @@ pub async fn start_web_qr_login() -> Result<QrLoginSession> {
         .map(str::to_owned)
         .or_else(|| qrcode_key_from_url(&url))
         .ok_or(Error::UpstreamChanged)?;
+    if !valid_qrcode_key(&qrcode_key) {
+        return Err(Error::UpstreamChanged);
+    }
 
     Ok(QrLoginSession { url, qrcode_key })
 }
 
 /// Polls once for QR login completion.
 pub async fn poll_web_qr_login(qrcode_key: &str) -> Result<QrPollStatus> {
-    if qrcode_key.trim().is_empty() {
-        return Err(Error::Config("qrcode_key 不能为空".into()));
+    let qrcode_key = qrcode_key.trim();
+    if !valid_qrcode_key(qrcode_key) {
+        return Err(Error::Config("qrcode_key 格式无效".into()));
     }
     let client = passport_client()?;
     let mut endpoint =
@@ -157,8 +165,12 @@ pub async fn poll_web_qr_login(qrcode_key: &str) -> Result<QrPollStatus> {
             let success_url = data
                 .get("url")
                 .and_then(Value::as_str)
-                .filter(|s| !s.is_empty())
+                .filter(|s| !s.is_empty() && s.len() <= 4_096)
                 .ok_or(Error::UpstreamChanged)?;
+            let parsed_success_url = Url::parse(success_url).map_err(|_| Error::UpstreamChanged)?;
+            if !is_allowed_bilibili_url(&parsed_success_url) {
+                return Err(Error::UpstreamChanged);
+            }
 
             // Legacy BBDown: SESSDATA embedded in the success URL query string.
             merge_query_session_pairs(success_url, &mut pairs);
@@ -181,13 +193,18 @@ pub async fn wait_web_qr_login(
     poll_interval: Duration,
     overall_timeout: Duration,
 ) -> Result<CookieCredential> {
-    let deadline = tokio::time::Instant::now() + overall_timeout;
+    let deadline = tokio::time::Instant::now()
+        .checked_add(overall_timeout)
+        .ok_or_else(|| Error::Config("扫码登录超时时间过大".into()))?;
     let mut confirmed = false;
     loop {
         if tokio::time::Instant::now() >= deadline {
             return Err(Error::Network("扫码登录超时".into()));
         }
-        match poll_web_qr_login(qrcode_key).await? {
+        match tokio::time::timeout_at(deadline, poll_web_qr_login(qrcode_key))
+            .await
+            .map_err(|_| Error::Network("扫码登录超时".into()))??
+        {
             QrPollStatus::WaitingScan => {}
             QrPollStatus::WaitingConfirm => {
                 if !confirmed {
@@ -200,7 +217,8 @@ pub async fn wait_web_qr_login(
             }
             QrPollStatus::Success(cookie) => return Ok(cookie),
         }
-        tokio::time::sleep(poll_interval).await;
+        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+        tokio::time::sleep(poll_interval.min(remaining)).await;
     }
 }
 
@@ -212,7 +230,7 @@ async fn exchange_success_url_for_cookies(
 ) -> Result<()> {
     let mut current = Url::parse(success_url).map_err(|_| Error::UpstreamChanged)?;
     for _ in 0..MAX_COOKIE_EXCHANGE_REDIRECTS {
-        if current.scheme() != "https" {
+        if !is_allowed_bilibili_url(&current) {
             return Err(Error::UpstreamChanged);
         }
         let response = client
@@ -243,7 +261,7 @@ async fn exchange_success_url_for_cookies(
             .ok_or(Error::UpstreamChanged)?;
         current = current.join(location).map_err(|_| Error::UpstreamChanged)?;
     }
-    Ok(())
+    Err(Error::UpstreamChanged)
 }
 
 fn merge_query_session_pairs(success_url: &str, pairs: &mut Vec<(String, String)>) {
@@ -334,6 +352,17 @@ fn credential_from_pairs(pairs: &[(String, String)]) -> Result<CookieCredential>
             "登录成功但未拿到 SESSDATA（cookie 交换失败，请重试）".into(),
         ));
     }
+    if pairs.iter().any(|(name, value)| {
+        name.is_empty()
+            || name.len() > 128
+            || value.len() > 8_192
+            || name
+                .bytes()
+                .chain(value.bytes())
+                .any(|byte| byte.is_ascii_control() || byte == b';')
+    }) {
+        return Err(Error::UpstreamChanged);
+    }
     let header = pairs
         .iter()
         .map(|(n, v)| format!("{n}={v}"))
@@ -350,15 +379,47 @@ fn qrcode_key_from_url(url: &str) -> Option<String> {
         .map(|(_, v)| v.into_owned())
 }
 
+fn valid_qrcode_key(key: &str) -> bool {
+    (1..=256).contains(&key.len())
+        && key
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
+}
+
+/// Passport controls this URL, but validate every hop before requesting it so
+/// an upstream payload change cannot turn the cookie exchange into an SSRF.
+fn is_allowed_bilibili_url(url: &Url) -> bool {
+    if url.scheme() != "https"
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || url.port_or_known_default() != Some(443)
+    {
+        return false;
+    }
+    url.host_str().is_some_and(|host| {
+        !host.ends_with('.')
+            && (host.eq_ignore_ascii_case("bilibili.com")
+                || host
+                    .to_ascii_lowercase()
+                    .strip_suffix(".bilibili.com")
+                    .is_some_and(|prefix| !prefix.is_empty()))
+    })
+}
+
 fn passport_client() -> Result<Client> {
-    Client::builder()
+    static CLIENT: OnceLock<Client> = OnceLock::new();
+    if let Some(client) = CLIENT.get() {
+        return Ok(client.clone());
+    }
+    let client = Client::builder()
         .connect_timeout(Duration::from_secs(10))
         .timeout(Duration::from_secs(20))
         // Follow redirects ourselves so every hop's Set-Cookie is visible.
         .redirect(Policy::none())
         .no_proxy()
         .build()
-        .map_err(|_| Error::Config("无法初始化哔哩哔哩登录 HTTP 客户端".into()))
+        .map_err(|_| Error::Config("无法初始化哔哩哔哩登录 HTTP 客户端".into()))?;
+    Ok(CLIENT.get_or_init(|| client).clone())
 }
 
 #[cfg(test)]
@@ -409,5 +470,38 @@ mod tests {
         assert!(cookie.as_str().contains("SESSDATA=secret"));
         assert!(cookie.as_str().contains("bili_jct=csrf"));
         assert!(!cookie.as_str().contains("noise="));
+    }
+
+    #[test]
+    fn cookie_exchange_urls_are_restricted_to_bilibili_https() {
+        for raw in [
+            "https://passport.bilibili.com/x/passport-login/web/crossDomain",
+            "https://www.bilibili.com/",
+            "https://bilibili.com/",
+        ] {
+            assert!(is_allowed_bilibili_url(&Url::parse(raw).unwrap()), "{raw}");
+        }
+        for raw in [
+            "http://passport.bilibili.com/x",
+            "https://passport.bilibili.com.evil.test/x",
+            "https://user@passport.bilibili.com/x",
+            "https://passport.bilibili.com:8443/x",
+        ] {
+            assert!(!is_allowed_bilibili_url(&Url::parse(raw).unwrap()), "{raw}");
+        }
+    }
+
+    #[test]
+    fn qrcode_keys_are_bounded_and_header_safe() {
+        assert!(valid_qrcode_key("abc_DEF-123"));
+        assert!(!valid_qrcode_key(""));
+        assert!(!valid_qrcode_key("contains space"));
+        assert!(!valid_qrcode_key(&"a".repeat(257)));
+    }
+
+    #[test]
+    fn cookie_pair_serialization_rejects_delimiter_injection() {
+        let pairs = vec![("SESSDATA".to_owned(), "secret; injected=1".to_owned())];
+        assert!(credential_from_pairs(&pairs).is_err());
     }
 }

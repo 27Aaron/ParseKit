@@ -7,6 +7,7 @@ use crate::{Error, Result, platforms::util::trim_url_candidate};
 
 const REDIRECT_HOSTS: &[&str] = &[
     "v.douyin.com",
+    "douyin.com",
     "www.douyin.com",
     "m.douyin.com",
     "www.iesdouyin.com",
@@ -33,26 +34,11 @@ pub fn extract_share_url(input: &str) -> Result<Url> {
         if url.scheme() == "http" {
             let _ = url.set_scheme("https");
         }
-        if is_douyin_host(&url) && !is_excluded_path(&url) {
+        if is_allowed_redirect_host(&url) && !is_excluded_path(&url) {
             return Ok(url);
         }
     }
     Err(Error::UnsupportedUrl)
-}
-
-fn is_douyin_host(url: &Url) -> bool {
-    let Some(host) = url.host_str().map(|host| host.to_ascii_lowercase()) else {
-        return false;
-    };
-    matches!(
-        host.as_str(),
-        "v.douyin.com"
-            | "www.douyin.com"
-            | "m.douyin.com"
-            | "douyin.com"
-            | "www.iesdouyin.com"
-            | "iesdouyin.com"
-    )
 }
 
 pub(super) fn is_short_link_host(url: &Url) -> bool {
@@ -62,16 +48,24 @@ pub(super) fn is_short_link_host(url: &Url) -> bool {
 
 pub(super) fn is_allowed_redirect_host(url: &Url) -> bool {
     url.scheme() == "https"
+        && url.username().is_empty()
+        && url.password().is_none()
+        && url.port_or_known_default() == Some(443)
         && url.host_str().is_some_and(|host| {
-            REDIRECT_HOSTS
-                .iter()
-                .any(|allowed| host.eq_ignore_ascii_case(allowed))
+            !host.ends_with('.')
+                && REDIRECT_HOSTS
+                    .iter()
+                    .any(|allowed| host.eq_ignore_ascii_case(allowed))
         })
 }
 
 fn is_excluded_path(url: &Url) -> bool {
     let path = url.path().to_ascii_lowercase();
-    path.starts_with("/share/user") || path.starts_with("/qishui") || path.starts_with("/user/")
+    path == "/share/user"
+        || path.starts_with("/share/user/")
+        || path.starts_with("/qishui")
+        || path == "/user"
+        || path.starts_with("/user/")
 }
 
 pub(super) fn extract_aweme_id(input: &str) -> Option<String> {

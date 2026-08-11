@@ -1,5 +1,7 @@
 //! Map embedded Douyin page data into the shared media model.
 
+use std::collections::HashSet;
+
 use serde_json::Value;
 use url::Url;
 
@@ -30,19 +32,47 @@ pub(super) fn parse_any_page_data(html: &str) -> Result<Value> {
 
 fn parse_script_json_assignment(html: &str, marker: &str) -> Result<Value> {
     // Slice through `</script>` because a regex cannot safely match nested JSON.
-    let marker_at = html.find(marker).ok_or(Error::UpstreamChanged)?;
-    let after_marker = &html[marker_at + marker.len()..];
-    let eq_at = after_marker.find('=').ok_or(Error::UpstreamChanged)?;
-    let after_eq = after_marker[eq_at + 1..].trim_start();
-    let script_end = after_eq.find("</script>").ok_or(Error::UpstreamChanged)?;
-    let mut json_slice = after_eq[..script_end].trim();
-    if let Some(stripped) = json_slice.strip_suffix(';') {
-        json_slice = stripped.trim();
+    // Scan every occurrence: marker text can also appear in unrelated scripts or
+    // comments before the real assignment.
+    for (marker_at, _) in html.match_indices(marker) {
+        let after_marker = html[marker_at + marker.len()..].trim_start();
+        let Some(after_eq) = after_marker.strip_prefix('=') else {
+            continue;
+        };
+        let after_eq = after_eq.trim_start();
+        let Some(script_end) = after_eq.find("</script>") else {
+            continue;
+        };
+        let mut json_slice = after_eq[..script_end].trim();
+        if let Some(stripped) = json_slice.strip_suffix(';') {
+            json_slice = stripped.trim();
+        }
+        if let Some(value) = parse_embedded_json(json_slice) {
+            return Ok(value);
+        }
     }
-    if !json_slice.starts_with('{') {
-        return Err(Error::UpstreamChanged);
+    Err(Error::UpstreamChanged)
+}
+
+fn parse_embedded_json(raw: &str) -> Option<Value> {
+    if raw.starts_with('{') {
+        return serde_json::from_str(raw).ok();
     }
-    serde_json::from_str(json_slice).map_err(|_| Error::UpstreamChanged)
+    if !raw
+        .get(..3)
+        .is_some_and(|prefix| prefix.eq_ignore_ascii_case("%7b"))
+    {
+        return None;
+    }
+
+    // Legacy Douyin payloads are form/percent encoded. Prefixing a field name
+    // lets `url`'s decoder handle UTF-8 and `+` semantics without another
+    // dependency.
+    let encoded = format!("value={raw}");
+    let decoded = url::form_urlencoded::parse(encoded.as_bytes())
+        .find(|(key, _)| key == "value")?
+        .1;
+    serde_json::from_str(&decoded).ok()
 }
 
 pub(super) fn build_post_from_router(aweme_id: &str, router: &Value) -> Result<ResolvedPost> {
@@ -119,24 +149,29 @@ pub(super) fn build_post_from_router(aweme_id: &str, router: &Value) -> Result<R
 
 fn collect_image_sources(item: &Value) -> Option<Vec<MediaSource>> {
     let images = item.get("images").and_then(Value::as_array)?;
+    let mut seen = HashSet::with_capacity(images.len());
     let mut sources = Vec::with_capacity(images.len());
     for image in images {
-        let Some(url_list) = image
-            .get("url_list")
-            .or_else(|| image.pointer("/display_image/url_list"))
-            .and_then(Value::as_array)
-        else {
+        let Some(url) = [
+            image.get("url_list"),
+            image.pointer("/display_image/url_list"),
+        ]
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_array)
+        .find_map(|url_list| {
+            url_list
+                .iter()
+                .filter_map(Value::as_str)
+                .rev()
+                .filter_map(|raw| Url::parse(raw).ok())
+                .find(|url| is_reviewed_https_url(url, REVIEWED_MEDIA_HOSTS))
+        }) else {
             continue;
         };
-        let Some(url) = url_list
-            .iter()
-            .filter_map(Value::as_str)
-            .rev()
-            .filter_map(|raw| Url::parse(raw).ok())
-            .find(|url| is_reviewed_https_url(url, REVIEWED_MEDIA_HOSTS))
-        else {
+        if !seen.insert(url.clone()) {
             continue;
-        };
+        }
         let width = image
             .get("width")
             .and_then(Value::as_u64)
@@ -186,14 +221,14 @@ fn collect_video_sources(video: &Value) -> Result<Vec<MediaSource>> {
         source.label = crate::model::resolution_tier_label(source.width, source.height)
             .map(str::to_owned)
             .or_else(|| Some("web".into()));
-        ranked.push((0, source));
+        ranked.push(((0, 0, 0), source));
     }
 
     if ranked.is_empty()
         && let Some(uri) = video
             .pointer("/play_addr/uri")
             .and_then(Value::as_str)
-            .filter(|value| !value.is_empty())
+            .filter(|value| !value.is_empty() && value.len() <= 4_096)
     {
         let width = video
             .pointer("/play_addr/width")
@@ -203,12 +238,14 @@ fn collect_video_sources(video: &Value) -> Result<Vec<MediaSource>> {
             .pointer("/play_addr/height")
             .and_then(Value::as_u64)
             .and_then(|value| u32::try_from(value).ok());
-        let url = Url::parse(&format!(
-            "https://www.douyin.com/aweme/v1/play/?video_id={uri}&ratio=720p&line=0"
-        ))
-        .map_err(|_| Error::UpstreamChanged)?;
+        let mut url = Url::parse("https://www.douyin.com/aweme/v1/play/")
+            .map_err(|_| Error::UpstreamChanged)?;
+        url.query_pairs_mut()
+            .append_pair("video_id", uri)
+            .append_pair("ratio", "720p")
+            .append_pair("line", "0");
         ranked.push((
-            0,
+            (0, 0, 0),
             MediaSource {
                 url,
                 codec: VideoCodec::Unknown,
@@ -224,15 +261,12 @@ fn collect_video_sources(video: &Value) -> Result<Vec<MediaSource>> {
     }
 
     ranked.sort_by_key(|(score, _)| std::cmp::Reverse(*score));
-    let mut sources = Vec::new();
+    let mut seen = HashSet::with_capacity(ranked.len());
+    let mut sources = Vec::with_capacity(ranked.len());
     for (_, source) in ranked {
-        if sources
-            .iter()
-            .any(|existing: &MediaSource| existing.url == source.url)
-        {
-            continue;
+        if seen.insert(source.url.clone()) {
+            sources.push(source);
         }
-        sources.push(source);
     }
     if sources.is_empty() {
         Err(Error::MediaUnavailable)
@@ -241,16 +275,12 @@ fn collect_video_sources(video: &Value) -> Result<Vec<MediaSource>> {
     }
 }
 
-fn quality_score(item: &Value, play: &Value) -> u64 {
+fn quality_score(item: &Value, play: &Value) -> (u64, u64, u64) {
     let width = play.get("width").and_then(Value::as_u64).unwrap_or(0);
     let height = play.get("height").and_then(Value::as_u64).unwrap_or(0);
     let size = play.get("data_size").and_then(Value::as_u64).unwrap_or(0);
     let bitrate = item.get("bit_rate").and_then(Value::as_u64).unwrap_or(0);
-    width
-        .saturating_mul(height)
-        .saturating_mul(1_000)
-        .saturating_add(size)
-        .saturating_add(bitrate)
+    (width.saturating_mul(height), bitrate, size)
 }
 
 fn play_addr_to_source(play_addr: &Value) -> Option<MediaSource> {
@@ -295,8 +325,11 @@ fn gear_label(item: &Value, play: &Value) -> Option<String> {
         {
             return Some(raw.to_owned());
         }
-        if let Some(n) = item.get(key).and_then(Value::as_u64)
-            && let Some(tier) = crate::model::resolution_tier_label(Some(n as u32), None)
+        if let Some(n) = item
+            .get(key)
+            .and_then(Value::as_u64)
+            .and_then(|value| u32::try_from(value).ok())
+            && let Some(tier) = crate::model::resolution_tier_label(Some(n), None)
         {
             return Some(tier.to_owned());
         }
@@ -333,6 +366,9 @@ fn codec_from_bitrate_item(item: &Value) -> VideoCodec {
 }
 
 pub(super) fn remove_video_watermark(mut url: Url) -> Url {
+    if !url.path().split('/').any(|segment| segment == "playwm") {
+        return url;
+    }
     let clean_path = url
         .path()
         .split('/')
@@ -344,13 +380,15 @@ pub(super) fn remove_video_watermark(mut url: Url) -> Url {
 }
 
 fn pick_cover_url(video: &Value) -> Option<Url> {
-    let cover = video.get("cover").or_else(|| video.get("origin_cover"))?;
-    cover
-        .get("url_list")?
-        .as_array()?
-        .iter()
-        .filter_map(Value::as_str)
-        .rev()
-        .filter_map(|raw| Url::parse(raw).ok())
-        .find(|url| is_reviewed_https_url(url, REVIEWED_MEDIA_HOSTS))
+    [video.get("cover"), video.get("origin_cover")]
+        .into_iter()
+        .flatten()
+        .filter_map(|cover| cover.get("url_list").and_then(Value::as_array))
+        .find_map(|urls| {
+            urls.iter()
+                .filter_map(Value::as_str)
+                .rev()
+                .filter_map(|raw| Url::parse(raw).ok())
+                .find(|url| is_reviewed_https_url(url, REVIEWED_MEDIA_HOSTS))
+        })
 }

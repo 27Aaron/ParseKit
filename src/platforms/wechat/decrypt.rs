@@ -14,11 +14,13 @@ pub(crate) const ENCRYPTED_PREFIX_BYTES: usize = 128 * 1024;
 /// Returns `true` when the file was encrypted and changed.
 pub async fn decrypt_file_prefix(path: &Path, decode_key: u64) -> Result<bool> {
     let mut file = OpenOptions::new().read(true).write(true).open(path).await?;
-    let length = file
-        .metadata()
-        .await?
-        .len()
-        .min(ENCRYPTED_PREFIX_BYTES as u64) as usize;
+    let length = usize::try_from(
+        file.metadata()
+            .await?
+            .len()
+            .min(u64::try_from(ENCRYPTED_PREFIX_BYTES).expect("encrypted prefix limit fits u64")),
+    )
+    .expect("encrypted prefix length fits usize");
     if length < 8 {
         return Err(Error::InvalidMedia("文件短于 MP4 文件头".into()));
     }
@@ -64,18 +66,21 @@ impl PrefixXor {
     }
 
     pub(crate) fn transform(&mut self, data: &mut [u8]) {
-        for byte in data.iter_mut() {
-            if self.remaining == 0 {
-                break;
-            }
+        let limit = data.len().min(self.remaining);
+        let mut offset = 0;
+        while offset < limit {
             if self.block_pos >= 8 {
                 self.block = self.isaac.next().to_be_bytes();
                 self.block_pos = 0;
             }
-            *byte ^= self.block[self.block_pos];
-            self.block_pos += 1;
-            self.remaining -= 1;
+            let count = (8 - self.block_pos).min(limit - offset);
+            for index in 0..count {
+                data[offset + index] ^= self.block[self.block_pos + index];
+            }
+            offset += count;
+            self.block_pos += count;
         }
+        self.remaining -= limit;
     }
 }
 

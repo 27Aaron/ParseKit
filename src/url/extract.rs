@@ -10,8 +10,20 @@ pub fn trim_url_candidate(matched: &str) -> &str {
 }
 
 /// Returns the first HTTPS URL after trimming trailing chat punctuation.
+/// Scheme matching is ASCII-case-insensitive, as required by URL syntax.
 pub fn first_https_url(input: &str) -> Option<&str> {
-    let start = input.find("https://")?;
+    const HTTPS_PREFIX: &[u8] = b"https://";
+    let lowercase_start = input.find("https://");
+    let prefix_end = lowercase_start.unwrap_or(input.len());
+    let start = input
+        .as_bytes()
+        .get(..prefix_end)
+        .and_then(|prefix| {
+            prefix
+                .windows(HTTPS_PREFIX.len())
+                .position(|window| window.eq_ignore_ascii_case(HTTPS_PREFIX))
+        })
+        .or(lowercase_start)?;
     let rest = &input[start..];
     // Whitespace delimits the candidate; punctuation is trimmed separately so
     // dots within hostnames such as `b23.tv` remain intact.
@@ -34,6 +46,10 @@ mod tests {
             trim_url_candidate("https://weixin.qq.com/sph/AzJ7CGPYWD】"),
             "https://weixin.qq.com/sph/AzJ7CGPYWD"
         );
+        assert_eq!(
+            trim_url_candidate("https://cdn.example.com/path.with.dots/file.mp4"),
+            "https://cdn.example.com/path.with.dots/file.mp4"
+        );
     }
 
     #[test]
@@ -43,5 +59,13 @@ mod tests {
             Some("https://www.bilibili.com/video/BV1GJ411x7h7")
         );
         assert_eq!(first_https_url("no link here"), None);
+    }
+
+    #[test]
+    fn finds_scheme_case_insensitively() {
+        assert_eq!(
+            first_https_url("first HTTPS://example.com/upper second https://example.com/lower"),
+            Some("HTTPS://example.com/upper")
+        );
     }
 }

@@ -115,8 +115,19 @@ impl DouyinResolver {
                 .await
                 .map_err(|error| map_douyin_network_error(&error))?;
 
-            if !response.status().is_redirection() {
-                return Ok(response.url().clone());
+            let status = response.status();
+            if !status.is_redirection() {
+                return match status {
+                    StatusCode::TOO_MANY_REQUESTS => Err(Error::RateLimited),
+                    StatusCode::NOT_FOUND | StatusCode::GONE => Err(Error::NotFound),
+                    status if !status.is_success() => Err(Error::Network(format!(
+                        "抖音短链返回 HTTP {}",
+                        status.as_u16()
+                    ))),
+                    _ => extract_aweme_id(response.url().as_str())
+                        .map(|_| response.url().clone())
+                        .ok_or(Error::UpstreamChanged),
+                };
             }
 
             let location = response
@@ -127,6 +138,10 @@ impl DouyinResolver {
             current = current
                 .join(location)
                 .map_err(|_| Error::Network("抖音短链 Location 无效".into()))?;
+
+            if !is_allowed_redirect_host(&current) {
+                return Err(Error::Network("抖音短链跳转到了未允许的主机".into()));
+            }
 
             if extract_aweme_id(current.as_str()).is_some() {
                 return Ok(current);

@@ -99,10 +99,19 @@ pub(super) fn is_allowed_media_url(url: &Url) -> bool {
 }
 
 pub(super) fn endpoint_is_loopback_http(url: &Url) -> bool {
-    url.scheme() == "http" && matches!(url.host_str(), Some("127.0.0.1" | "localhost" | "::1"))
+    url.scheme() == "http"
+        && url.username().is_empty()
+        && url.password().is_none()
+        && matches!(url.host_str(), Some("127.0.0.1" | "localhost" | "::1"))
 }
 
 pub(super) fn query_value(url: &Url, name: &str) -> Option<String> {
-    url.query_pairs()
-        .find_map(|(key, value)| (key == name && !value.is_empty()).then(|| value.into_owned()))
+    let mut values = url
+        .query_pairs()
+        .filter(|(key, value)| key == name && !value.is_empty())
+        .map(|(_, value)| value);
+    let first = values.next()?;
+    values
+        .all(|value| value.as_ref() == first.as_ref())
+        .then(|| first.into_owned())
 }

@@ -98,6 +98,11 @@ fn normalizes_clean_direct_url_and_rejects_incomplete_urls() {
     let dotted =
         Url::parse("https://finder.video.qq.com./video.mp4?encfilekey=key&token=token").unwrap();
     assert!(derive_direct_media_url(&dotted).is_none());
+
+    let ambiguous =
+        Url::parse("https://finder.video.qq.com/video.mp4?encfilekey=key&token=one&token=two")
+            .unwrap();
+    assert!(derive_direct_media_url(&ambiguous).is_none());
 }
 
 #[test]
@@ -141,6 +146,18 @@ fn assess_yuanbao_cookie_detects_markers() {
     assert_eq!(assess_yuanbao_cookie(""), CredentialStatus::Absent);
     assert_eq!(
         assess_yuanbao_cookie("foo=bar; baz=1"),
+        CredentialStatus::Incomplete
+    );
+    assert_eq!(
+        assess_yuanbao_cookie("hy_user=; hy_token="),
+        CredentialStatus::Incomplete
+    );
+    assert_eq!(
+        assess_yuanbao_cookie("hy_user=u1"),
+        CredentialStatus::Incomplete
+    );
+    assert_eq!(
+        assess_yuanbao_cookie("hy_token=t1"),
         CredentialStatus::Incomplete
     );
     assert_eq!(

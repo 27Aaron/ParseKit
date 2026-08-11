@@ -225,7 +225,9 @@ pub async fn wait_web_qr_login(
     poll_interval: Duration,
     overall_timeout: Duration,
 ) -> Result<CookieCredential> {
-    let deadline = tokio::time::Instant::now() + overall_timeout;
+    let deadline = tokio::time::Instant::now()
+        .checked_add(overall_timeout)
+        .ok_or_else(|| Error::Config("扫码登录超时时间过大".into()))?;
     let mut scanned = false;
     let mut cancelled = false;
 
@@ -349,11 +351,33 @@ fn login_client(cookies: Arc<Jar>) -> Result<Client> {
     Client::builder()
         .connect_timeout(Duration::from_secs(10))
         .timeout(Duration::from_secs(35))
-        .redirect(Policy::limited(4))
+        .redirect(Policy::custom(|attempt| {
+            if attempt.previous().len() >= 4 || !is_allowed_login_url(attempt.url()) {
+                attempt.stop()
+            } else {
+                attempt.follow()
+            }
+        }))
         .cookie_provider(cookies)
         .no_proxy()
         .build()
         .map_err(|_| Error::Config("无法初始化元宝扫码登录客户端".into()))
+}
+
+fn is_allowed_login_url(url: &Url) -> bool {
+    url.scheme() == "https"
+        && url.username().is_empty()
+        && url.password().is_none()
+        && url.port_or_known_default() == Some(443)
+        && url.host_str().is_some_and(|host| {
+            [
+                "open.weixin.qq.com",
+                "lp.open.weixin.qq.com",
+                "yuanbao.tencent.com",
+            ]
+            .iter()
+            .any(|allowed| host.eq_ignore_ascii_case(allowed))
+        })
 }
 
 fn callback_url(nonce: &str) -> Result<Url> {
@@ -449,12 +473,17 @@ fn login_response_error(value: &Value) -> Option<String> {
 }
 
 fn response_message(value: &Value) -> Option<String> {
-    ["message", "msg", "errMsg"]
+    let message = ["message", "msg", "errMsg"]
         .into_iter()
         .find_map(|key| value.get(key).and_then(Value::as_str))
         .map(str::trim)
-        .filter(|message| !message.is_empty())
-        .map(str::to_owned)
+        .filter(|message| !message.is_empty())?;
+    let sanitized: String = message
+        .chars()
+        .filter(|character| !character.is_control())
+        .take(256)
+        .collect();
+    (!sanitized.is_empty()).then_some(sanitized)
 }
 
 fn value_as_i64(value: &Value) -> Option<i64> {
@@ -562,5 +591,24 @@ mod tests {
         assert_eq!(login_response_error(&value).as_deref(), Some("登录码无效"));
         assert!(login_response_error(&serde_json::json!({"code": 0, "data": {}})).is_none());
         assert!(login_response_error(&serde_json::json!({"error": null})).is_none());
+    }
+
+    #[test]
+    fn login_redirects_are_limited_to_expected_https_origins() {
+        for raw in [
+            "https://open.weixin.qq.com/connect/qrconnect",
+            "https://lp.open.weixin.qq.com/connect/l/qrconnect",
+            "https://yuanbao.tencent.com/api/joint/login",
+        ] {
+            assert!(is_allowed_login_url(&Url::parse(raw).unwrap()), "{raw}");
+        }
+        for raw in [
+            "http://open.weixin.qq.com/connect/qrconnect",
+            "https://open.weixin.qq.com.evil.test/connect/qrconnect",
+            "https://user@yuanbao.tencent.com/api/joint/login",
+            "https://yuanbao.tencent.com:8443/api/joint/login",
+        ] {
+            assert!(!is_allowed_login_url(&Url::parse(raw).unwrap()), "{raw}");
+        }
     }
 }

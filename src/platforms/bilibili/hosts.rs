@@ -9,7 +9,6 @@ pub(super) const USER_AGENT_VALUE: &str = "Mozilla/5.0 (Macintosh; Intel Mac OS 
 pub const REVIEWED_MEDIA_HOSTS: &[&str] = &[
     ".bilivideo.com",
     ".bilivideo.cn",
-    ".akamaized.net",
     ".hdslb.com",
     "upos-sz-mirrorcos.bilivideo.com",
     "upos-sz-mirrorhw.bilivideo.com",

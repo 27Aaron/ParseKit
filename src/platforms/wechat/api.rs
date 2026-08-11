@@ -28,6 +28,13 @@ pub(super) fn number_at(value: &Value, key: &str) -> Option<u64> {
         .or_else(|| value.as_str()?.parse::<u64>().ok())
 }
 
+pub(super) fn integer_at(value: &Value, key: &str) -> Option<i64> {
+    let value = value.get(key)?;
+    value
+        .as_i64()
+        .or_else(|| value.as_str()?.parse::<i64>().ok())
+}
+
 pub(super) fn value_to_string(value: &Value) -> Option<String> {
     match value {
         Value::String(value) => Some(value.clone()),
@@ -44,14 +51,25 @@ pub(super) fn value_to_text(value: Option<&Value>) -> String {
 }
 
 pub(super) fn non_empty(value: String) -> Option<String> {
-    (!value.trim().is_empty()).then(|| value.trim().to_owned())
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        None
+    } else if trimmed.len() == value.len() {
+        Some(value)
+    } else {
+        Some(trimmed.to_owned())
+    }
 }
 
 pub(super) fn response_looks_like_login(value: &Value) -> bool {
-    let message = value_to_text(value.get("msg")) + &value_to_text(value.get("errMsg"));
-    ["login", "登录", "cookie", "unauthorized", "未登录"]
-        .iter()
-        .any(|word| message.contains(word))
+    ["msg", "errMsg", "message"]
+        .into_iter()
+        .map(|key| value_to_text(value.get(key)))
+        .any(|message| {
+            ["login", "登录", "cookie", "unauthorized", "未登录"]
+                .iter()
+                .any(|word| message.contains(word))
+        })
 }
 
 pub(super) fn map_status(status: StatusCode, yuanbao: bool) -> Result<()> {

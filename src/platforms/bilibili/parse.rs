@@ -1,5 +1,7 @@
 //! Map Bilibili API payloads into the shared media model.
 
+use std::collections::HashSet;
+
 use serde_json::Value;
 use url::Url;
 
@@ -99,12 +101,10 @@ pub(super) fn build_post_from_payloads(view: &Value, play: &Value) -> Result<Res
 pub(super) fn collect_play_sources(play: &Value) -> Vec<MediaSource> {
     let mut sources = collect_durl_sources(play);
     sources.extend(collect_dash_video_sources(play));
+    let mut seen = HashSet::with_capacity(sources.len());
     let mut unique = Vec::with_capacity(sources.len());
     for source in sources {
-        if !unique
-            .iter()
-            .any(|existing: &MediaSource| existing.url == source.url)
-        {
+        if seen.insert(source.url.clone()) {
             unique.push(source);
         }
     }
@@ -227,6 +227,11 @@ fn collect_dash_video_sources(play: &Value) -> Vec<MediaSource> {
             .get("codecs")
             .and_then(Value::as_str)
             .and_then(dash_codec_short);
+        let codec = item
+            .get("codecs")
+            .and_then(Value::as_str)
+            .map(dash_codec)
+            .unwrap_or(VideoCodec::Unknown);
         let label = match (qn_label, codec_hint) {
             (Some(q), Some(c)) => Some(format!("{q}/{c}")),
             (Some(q), None) => Some(q),
@@ -244,6 +249,7 @@ fn collect_dash_video_sources(play: &Value) -> Vec<MediaSource> {
                 source.height = height;
                 source.bitrate_bps = (bandwidth > 0).then_some(bandwidth);
                 source.label = label.clone();
+                source.codec = codec;
                 ranked.push((bandwidth, source));
                 break;
             }
@@ -251,6 +257,17 @@ fn collect_dash_video_sources(play: &Value) -> Vec<MediaSource> {
     }
     ranked.sort_by_key(|(bandwidth, _)| std::cmp::Reverse(*bandwidth));
     ranked.into_iter().map(|(_, source)| source).collect()
+}
+
+fn dash_codec(codecs: &str) -> VideoCodec {
+    let lower = codecs.to_ascii_lowercase();
+    if lower.starts_with("avc") {
+        VideoCodec::H264
+    } else if lower.starts_with("hev") || lower.starts_with("hvc") {
+        VideoCodec::H265
+    } else {
+        VideoCodec::Unknown
+    }
 }
 
 fn dash_codec_short(codecs: &str) -> Option<&'static str> {

@@ -6,6 +6,7 @@ use reqwest::{
     Client,
     header::{ACCEPT, ACCEPT_LANGUAGE, CONTENT_TYPE, COOKIE, ORIGIN, REFERER, USER_AGENT},
 };
+use serde::Deserialize as _;
 use serde_json::Value;
 use url::Url;
 use uuid::Uuid;
@@ -22,8 +23,9 @@ use crate::{
 use super::{
     SPEC,
     api::{
-        FeedBaseRequest, FeedRequest, ParseData, ParseRequest, cookie_value, map_network_error,
-        map_status, non_empty, read_json, response_looks_like_login, value_to_text,
+        FeedBaseRequest, FeedRequest, ParseData, ParseRequest, cookie_value, integer_at,
+        map_network_error, map_status, non_empty, read_json, response_looks_like_login,
+        value_to_text,
     },
     parse::build_post,
     share::{
@@ -201,7 +203,7 @@ impl WechatResolver {
         map_status(response.status(), true)?;
         let value = read_json(response).await?;
 
-        let code = value.get("code").and_then(Value::as_i64).unwrap_or(0);
+        let code = integer_at(&value, "code").unwrap_or(0);
         if code != 0 {
             return if response_looks_like_login(&value) {
                 Err(Error::LoginRequired)
@@ -210,14 +212,14 @@ impl WechatResolver {
             };
         }
 
-        let data = value.get("data").cloned().ok_or_else(|| {
+        let data = value.get("data").ok_or_else(|| {
             if response_looks_like_login(&value) {
                 Error::LoginRequired
             } else {
                 Error::UpstreamChanged
             }
         })?;
-        serde_json::from_value::<ParseData>(data).map_err(|_| Error::UpstreamChanged)
+        ParseData::deserialize(data).map_err(|_| Error::UpstreamChanged)
     }
 
     async fn request_feed(&self, export_id: &str, general_token: &str) -> Result<Value> {
@@ -275,10 +277,8 @@ impl WechatResolver {
         map_status(response.status(), false)?;
         let value = read_json(response).await?;
 
-        let err_code = value
-            .get("errCode")
-            .or_else(|| value.get("errcode"))
-            .and_then(Value::as_i64)
+        let err_code = integer_at(&value, "errCode")
+            .or_else(|| integer_at(&value, "errcode"))
             .unwrap_or(0);
         if err_code != 0 {
             return if response_looks_like_login(&value) {
@@ -302,9 +302,8 @@ pub fn assess_yuanbao_cookie(cookie: &str) -> CredentialStatus {
     let has_user = cookie_value(trimmed, "hy_user").is_some();
     let has_session = cookie_value(trimmed, "token").is_some()
         || cookie_value(trimmed, "hy_token").is_some()
-        || cookie_value(trimmed, "yuanbao_token").is_some()
-        || trimmed.contains("hy_user=");
-    if has_user || has_session {
+        || cookie_value(trimmed, "yuanbao_token").is_some();
+    if has_user && has_session {
         CredentialStatus::Present
     } else {
         CredentialStatus::Incomplete

@@ -4,7 +4,7 @@ use super::{
     BilibiliResolver, extract_share_url,
     parse::{build_post_from_payloads, collect_play_sources},
 };
-use crate::{CredentialStatus, Error, PlatformId};
+use crate::{CredentialStatus, Error, PlatformId, VideoCodec};
 
 #[test]
 fn extracts_bv_and_av_urls() {
@@ -72,6 +72,7 @@ fn collects_dash_video_by_bandwidth() {
     assert!(sources[0].url.as_str().contains("high"));
     assert_eq!(sources[0].width, Some(1920));
     assert_eq!(sources[0].label.as_deref(), Some("1080P/HEVC"));
+    assert_eq!(sources[0].codec, VideoCodec::H265);
 }
 
 #[test]
@@ -83,6 +84,16 @@ fn rejects_lookalike_media_hosts() {
         }]
     });
     assert!(collect_play_sources(&play).is_empty());
+
+    let unrelated_akamai = serde_json::json!({
+        "durl": [{"url": "https://unrelated.akamaized.net/video.mp4"}]
+    });
+    assert!(collect_play_sources(&unrelated_akamai).is_empty());
+
+    let reviewed_akamai = serde_json::json!({
+        "durl": [{"url": "https://upos-hz-mirrorakam.akamaized.net/video.mp4"}]
+    });
+    assert_eq!(collect_play_sources(&reviewed_akamai).len(), 1);
 }
 
 #[test]
@@ -97,6 +108,23 @@ fn credential_status_detects_sessdata() {
 
     let incomplete = BilibiliResolver::with_cookie("DedeUserID=1; foo=bar").unwrap();
     assert_eq!(incomplete.credential_status(), CredentialStatus::Incomplete);
+
+    let empty = BilibiliResolver::with_cookie("SESSDATA=; bili_jct=x").unwrap();
+    assert_eq!(empty.credential_status(), CredentialStatus::Incomplete);
+}
+
+#[test]
+fn accepts_case_insensitive_scheme_and_host_but_not_malformed_bvids() {
+    let url = extract_share_url("HTTPS://WWW.BILIBILI.COM/video/BV1GJ411x7h7").unwrap();
+    assert_eq!(url.host_str(), Some("www.bilibili.com"));
+
+    assert!(matches!(
+        extract_share_url(&format!(
+            "https://www.bilibili.com/video/BV{}",
+            "a".repeat(65)
+        )),
+        Err(Error::UnsupportedUrl)
+    ));
 }
 
 #[test]

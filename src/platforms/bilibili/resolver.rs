@@ -1,6 +1,6 @@
 //! Network orchestration for public Bilibili videos.
 
-use std::time::Duration;
+use std::{collections::HashSet, time::Duration};
 
 use reqwest::{
     Client, StatusCode,
@@ -89,8 +89,8 @@ impl BilibiliResolver {
         match &self.cookie {
             None => CredentialStatus::Absent,
             Some(cookie) => {
-                let raw = cookie.as_str();
-                let has_sess = cookie_value(raw, "SESSDATA").is_some() || raw.contains("SESSDATA=");
+                let has_sess = cookie_value(cookie.as_str(), "SESSDATA")
+                    .is_some_and(|value| !value.is_empty());
                 if has_sess {
                     CredentialStatus::Present
                 } else {
@@ -177,16 +177,20 @@ impl BilibiliResolver {
                     .append_pair("aid", &aid.to_string());
             }
         }
-        let value = self.request_api(endpoint).await?;
+        let mut value = self.request_api(endpoint).await?;
         let code = value.get("code").and_then(Value::as_i64).unwrap_or(-1);
         if code != 0 {
             return match code {
                 -404 | 62002 => Err(Error::NotFound),
-                -412 | -101 => Err(Error::LoginRequired),
+                -101 => Err(Error::LoginRequired),
+                -412 => Err(Error::RateLimited),
                 _ => Err(Error::UpstreamChanged),
             };
         }
-        value.get("data").cloned().ok_or(Error::UpstreamChanged)
+        value
+            .get_mut("data")
+            .map(Value::take)
+            .ok_or(Error::UpstreamChanged)
     }
 
     /// Requests playurl ladders and merges progressive + DASH sources.
@@ -208,6 +212,7 @@ impl BilibiliResolver {
         };
         let mut last_error = None;
         let mut collected = Vec::new();
+        let mut seen_urls = HashSet::new();
         let mut got_dash = false;
         for &(fnval, qn) in attempts {
             // After a successful DASH payload, only still need progressive (fnval=1).
@@ -218,10 +223,7 @@ impl BilibiliResolver {
                 Ok(play) => {
                     let before = collected.len();
                     for source in collect_play_sources(&play) {
-                        if !collected
-                            .iter()
-                            .any(|existing: &MediaSource| existing.url == source.url)
-                        {
+                        if seen_urls.insert(source.url.clone()) {
                             collected.push(source);
                         }
                     }
@@ -261,11 +263,18 @@ impl BilibiliResolver {
             .append_pair("fnval", &fnval.to_string())
             .append_pair("fourk", "1")
             .append_pair("fnver", "0");
-        let value = self.request_api(endpoint).await?;
-        if value.get("code").and_then(Value::as_i64).unwrap_or(-1) != 0 {
-            return Err(Error::MediaUnavailable);
+        let mut value = self.request_api(endpoint).await?;
+        match value.get("code").and_then(Value::as_i64).unwrap_or(-1) {
+            0 => {}
+            -101 => return Err(Error::LoginRequired),
+            -404 | 62002 => return Err(Error::NotFound),
+            -412 => return Err(Error::RateLimited),
+            _ => return Err(Error::MediaUnavailable),
         }
-        value.get("data").cloned().ok_or(Error::MediaUnavailable)
+        value
+            .get_mut("data")
+            .map(Value::take)
+            .ok_or(Error::MediaUnavailable)
     }
 
     async fn request_api(&self, endpoint: Url) -> Result<Value> {
@@ -327,6 +336,7 @@ fn dedupe_and_rank_play_sources(sources: Vec<MediaSource>) -> Vec<MediaSource> {
             .then_with(|| b.size_hint.unwrap_or(0).cmp(&a.size_hint.unwrap_or(0)))
     });
 
+    let mut seen = HashSet::with_capacity(ranked.len());
     let mut unique = Vec::with_capacity(ranked.len());
     for source in ranked {
         let key = (
@@ -334,14 +344,7 @@ fn dedupe_and_rank_play_sources(sources: Vec<MediaSource>) -> Vec<MediaSource> {
             source.width.unwrap_or(0),
             source.height.unwrap_or(0),
         );
-        let already = unique.iter().any(|existing: &MediaSource| {
-            (
-                existing.label.clone().unwrap_or_default(),
-                existing.width.unwrap_or(0),
-                existing.height.unwrap_or(0),
-            ) == key
-        });
-        if !already {
+        if seen.insert(key) {
             unique.push(source);
         }
     }

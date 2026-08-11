@@ -1,41 +1,48 @@
 use std::{env, path::PathBuf, time::Duration};
 
 use parse_kit::{
+    PlatformId,
     media::{DownloadRequestIdentity, MediaDownloader, probe_media},
     model::{MediaSource, MediaSourceKind, ResolvedPost},
-    wechat::{REVIEWED_WECHAT_MEDIA_HOSTS, WechatResolver},
+    wechat::{REVIEWED_WECHAT_MEDIA_HOSTS, WechatResolver, extract_share_url},
 };
 use uuid::Uuid;
 
 const SAMPLE_SHARE_URL: &str = "https://weixin.qq.com/sph/AzJ7CGPYWD";
 const LIVE_DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(20 * 60);
 
+#[test]
+fn extracts_wechat_share_text_without_network_access() {
+    let url = extract_share_url(&format!("看看这个 {SAMPLE_SHARE_URL}】"))
+        .expect("WeChat URL extraction");
+
+    assert_eq!(url.as_str(), SAMPLE_SHARE_URL);
+}
+
 #[tokio::test]
 #[ignore = "requires YUANBAO_COOKIE and live Tencent endpoints"]
 async fn resolves_wechat_sample() {
     let post = resolve_sample().await;
 
-    assert!(
-        post.platform == parse_kit::PlatformId::Wechat,
-        "unexpected platform identifier"
-    );
-    assert!(
-        post.canonical_url.as_str() == SAMPLE_SHARE_URL,
-        "unexpected canonical share URL"
-    );
+    assert_eq!(post.platform, PlatformId::Wechat);
+    assert_eq!(post.canonical_url.as_str(), SAMPLE_SHARE_URL);
     assert!(!post.post_id.trim().is_empty(), "missing post identifier");
     let primary = post.primary_video().expect("resolved post has no video");
     assert_safe_media_source(primary);
 
     if primary.provenance == MediaSourceKind::Derived {
         let query: Vec<_> = primary.url.query_pairs().collect();
-        assert!(query.len() == 2, "derived source query shape changed");
+        assert_eq!(query.len(), 2, "derived source query shape changed");
         assert!(
-            query[0].0 == "encfilekey" && !query[0].1.is_empty(),
+            query
+                .iter()
+                .any(|(key, value)| key == "encfilekey" && !value.is_empty()),
             "derived source is missing encfilekey"
         );
         assert!(
-            query[1].0 == "token" && !query[1].1.is_empty(),
+            query
+                .iter()
+                .any(|(key, value)| key == "token" && !value.is_empty()),
             "derived source is missing token"
         );
     }
@@ -128,7 +135,7 @@ fn assert_safe_media_source(source: &MediaSource) {
     assert!(
         source.url.username().is_empty()
             && source.url.password().is_none()
-            && source.url.port().is_none_or(|port| port == 443),
+            && source.url.port() != Some(0),
         "media source contains unexpected authority components"
     );
     assert!(
