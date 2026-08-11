@@ -598,7 +598,7 @@ mod tests {
     impl TestDirectory {
         fn new() -> Self {
             let path =
-                env::temp_dir().join(format!("parse-bot-ffprobe-test-{}", uuid::Uuid::new_v4()));
+                env::temp_dir().join(format!("parse-kit-ffprobe-test-{}", uuid::Uuid::new_v4()));
             fs::create_dir(&path).unwrap();
             Self(path)
         }

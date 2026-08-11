@@ -15,6 +15,6 @@ pub use probe::{MediaProbe, probe_media};
 
 /// WeChat Channels media prefix decrypt (platform-private implementation).
 ///
-/// Prefer `parse_core::wechat::decrypt_file_prefix` when the call site already
+/// Prefer `parse_kit::wechat::decrypt_file_prefix` when the call site already
 /// knows it is handling WeChat media.
 pub use crate::platforms::wechat::decrypt_file_prefix;

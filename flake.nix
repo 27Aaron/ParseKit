@@ -1,5 +1,5 @@
 {
-  description = "Rust development environment for the Parse library";
+  description = "Rust development environment for ParseKit";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
@@ -55,7 +55,7 @@
           SSL_CERT_FILE = "${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt";
 
           shellHook = ''
-            echo "parse-core dev shell: $(rustc --version) | ffprobe=$(command -v ffprobe >/dev/null && echo ok || echo missing)"
+            echo "parse-kit dev shell: $(rustc --version) | ffprobe=$(command -v ffprobe >/dev/null && echo ok || echo missing)"
           '';
         };
       }

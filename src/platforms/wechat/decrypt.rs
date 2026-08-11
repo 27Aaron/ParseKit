@@ -241,7 +241,7 @@ mod tests {
     #[tokio::test]
     async fn decrypts_only_prefix_and_does_not_commit_a_wrong_key() {
         let path = std::env::temp_dir().join(format!(
-            "parse-bot-decrypt-test-{}.mp4",
+            "parse-kit-decrypt-test-{}.mp4",
             Uuid::new_v4().simple()
         ));
         let mut plaintext = vec![0_u8; ENCRYPTED_PREFIX_BYTES + 32];
