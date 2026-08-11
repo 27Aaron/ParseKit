@@ -25,8 +25,8 @@
         default = pkgs.mkShell {
           packages =
             (with pkgs; [
-              # Rust toolchain and editor support.
-              # MSRV is 1.88 (see Cargo.toml); nixpkgs may be newer, which is fine.
+              # Rust toolchain and editor support (nixpkgs stable channel via flake.lock).
+              # Keep in sync with Cargo.toml rust-version / CI stable when practical.
               rustc
               cargo
               clippy
@@ -53,10 +53,6 @@
 
           RUST_BACKTRACE = "1";
           SSL_CERT_FILE = "${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt";
-
-          shellHook = ''
-            echo "parse-kit dev shell: $(rustc --version) | ffprobe=$(command -v ffprobe >/dev/null && echo ok || echo missing)"
-          '';
         };
       }
     );

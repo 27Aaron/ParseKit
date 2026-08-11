@@ -308,10 +308,10 @@ fn extract_aweme_id(input: &str) -> Option<String> {
     });
 
     for pattern in patterns {
-        if let Some(capture) = pattern.captures(input) {
-            if let Some(id) = capture.get(1) {
-                return Some(id.as_str().to_owned());
-            }
+        if let Some(capture) = pattern.captures(input)
+            && let Some(id) = capture.get(1)
+        {
+            return Some(id.as_str().to_owned());
         }
     }
     None
@@ -344,19 +344,19 @@ fn build_post_from_router(aweme_id: &str, router: &Value) -> Result<ResolvedPost
         .ok_or(Error::UpstreamChanged)?;
     let video_info = page.get("videoInfoRes").ok_or(Error::UpstreamChanged)?;
 
-    if let Some(filter_list) = video_info.get("filter_list").and_then(Value::as_array) {
-        if !filter_list.is_empty() {
-            let reason = filter_list
-                .first()
-                .and_then(|item| item.get("filter_reason"))
-                .and_then(Value::as_str)
-                .unwrap_or("");
-            return if reason.contains("NOT_EXIST") || reason.contains("DELETE") {
-                Err(Error::NotFound)
-            } else {
-                Err(Error::MediaUnavailable)
-            };
-        }
+    if let Some(filter_list) = video_info.get("filter_list").and_then(Value::as_array)
+        && !filter_list.is_empty()
+    {
+        let reason = filter_list
+            .first()
+            .and_then(|item| item.get("filter_reason"))
+            .and_then(Value::as_str)
+            .unwrap_or("");
+        return if reason.contains("NOT_EXIST") || reason.contains("DELETE") {
+            Err(Error::NotFound)
+        } else {
+            Err(Error::MediaUnavailable)
+        };
     }
 
     let item = video_info
@@ -437,10 +437,10 @@ fn pick_play_url(video: &Value) -> Result<(Url, Option<u32>, Option<u32>)> {
         }
     }
 
-    if let Some(play_addr) = video.get("play_addr") {
-        if let Some(result) = play_addr_to_url(play_addr) {
-            return Ok(result);
-        }
+    if let Some(play_addr) = video.get("play_addr")
+        && let Some(result) = play_addr_to_url(play_addr)
+    {
+        return Ok(result);
     }
 
     // Fallback: construct watermark-free play API from video uri.
