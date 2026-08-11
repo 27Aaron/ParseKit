@@ -11,7 +11,7 @@
 |------|------|
 | 微信视频号 | ✅ |
 
-后续计划：抖音、快手、B 站等（在 `ParseHub` 注册新平台即可）。
+后续计划：抖音、快手、B 站等。新平台实现 `PlatformResolver`，挂到 `platforms::Platform` 并在 `ParseHub::new` 注册即可（见 `src/platforms/mod.rs`）。
 
 ## 作为依赖使用
 
