@@ -58,17 +58,29 @@ clean:
     cargo clean
 
 # --- CLI ---------------------------------------------------------------------
+#
+# Correct:
+#   just resolve 'https://v.douyin.com/…'
+#   just resolve 'https://v.douyin.com/…' --json
+#   just download 'https://weixin.qq.com/sph/…'
+#   just download 'https://weixin.qq.com/sph/…' --json --force
+#   just pk resolve '…' --json
+#   just pk download '…' --force
+#   just platforms
+#
+# Wrong (extra `--` becomes a pk argument):
+#   just pk -- resolve '…'     # don't do this
+#
+# Recipe already inserts cargo's option terminator (`cargo run … -- …`).
 
-# just pk -- platforms
-# just pk -- resolve '分享链接'
 pk *args:
     cargo run --locked --bin pk -- {{ args }}
 
-resolve input:
-    cargo run --locked --bin pk -- resolve {{ input }}
+resolve *args:
+    cargo run --locked --bin pk -- resolve {{ args }}
 
-download input out="./downloads":
-    cargo run --locked --bin pk -- download {{ input }} -o {{ out }}
+download *args:
+    cargo run --locked --bin pk -- download {{ args }}
 
 platforms:
     cargo run --locked --bin pk -- platforms --check
