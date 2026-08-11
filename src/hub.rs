@@ -90,10 +90,10 @@ impl ParseKit {
     pub async fn resolve_text(&self, input: &str) -> Result<ResolvedPost> {
         let span = tracing::info_span!("parse_kit.resolve_text");
         async move {
-            let platform = self.matching_platform(input)?;
+            let (platform, share_url) = self.matching_platform(input)?;
             let id = platform.platform_id().as_str();
             let mut post = platform
-                .resolve_text(input)
+                .resolve_url(&share_url)
                 .instrument(tracing::info_span!("platform.resolve", platform = id))
                 .await?;
             // Soft-fill size_hint when upstream omitted it (Douyin/WeChat often do).
@@ -109,10 +109,10 @@ impl ParseKit {
     pub async fn resolve_url(&self, url: &Url) -> Result<ResolvedPost> {
         let span = tracing::info_span!("parse_kit.resolve_url");
         async move {
-            let platform = self.matching_platform(url.as_str())?;
+            let (platform, normalized_url) = self.matching_platform(url.as_str())?;
             let id = platform.platform_id().as_str();
             let mut post = platform
-                .resolve_url(url)
+                .resolve_url(&normalized_url)
                 .instrument(tracing::info_span!("platform.resolve", platform = id))
                 .await?;
             crate::media::enrich_missing_size_hints(&mut post)
@@ -124,10 +124,12 @@ impl ParseKit {
         .await
     }
 
-    fn matching_platform(&self, input: &str) -> Result<&Platform> {
+    /// Finds the first matching resolver and retains its extracted URL so text
+    /// resolution does not repeat the same regex and URL parsing work.
+    fn matching_platform(&self, input: &str) -> Result<(&Platform, Url)> {
         for platform in &self.platforms {
             match platform.extract_share_url(input) {
-                Ok(_) => return Ok(platform),
+                Ok(url) => return Ok((platform, url)),
                 Err(Error::UnsupportedUrl) => {}
                 Err(error) => return Err(error),
             }
@@ -239,10 +241,11 @@ mod tests {
     #[test]
     fn matching_platform_routes_using_registered_resolvers() {
         let kit = ParseKit::builder().bilibili().unwrap().build().unwrap();
-        let platform = kit
+        let (platform, url) = kit
             .matching_platform("看看 https://www.bilibili.com/video/BV1GJ411x7h7?utm_source=chat")
             .expect("Bilibili match");
 
         assert_eq!(platform.platform_id(), crate::PlatformId::Bilibili);
+        assert_eq!(url.as_str(), "https://www.bilibili.com/video/BV1GJ411x7h7");
     }
 }

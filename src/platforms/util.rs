@@ -59,21 +59,25 @@ pub async fn read_body_limited(
     max_bytes: usize,
     map_error: impl Fn(&reqwest::Error) -> Error,
 ) -> Result<Vec<u8>> {
-    if response
-        .content_length()
-        .is_some_and(|length| length > max_bytes as u64)
-    {
+    let content_length = response.content_length();
+    if content_length.is_some_and(|length| length > max_bytes as u64) {
         return Err(Error::UpstreamChanged);
     }
 
-    let mut bytes = Vec::new();
+    // A trustworthy, bounded Content-Length lets the common one-chunk case
+    // allocate exactly once. The streaming limit below remains authoritative
+    // when the header is absent or inaccurate.
+    let initial_capacity = content_length
+        .and_then(|length| usize::try_from(length).ok())
+        .filter(|length| *length <= max_bytes)
+        .unwrap_or(0);
+    let mut bytes = Vec::with_capacity(initial_capacity);
     while let Some(chunk) = response.chunk().await.map_err(|error| map_error(&error))? {
-        let next_len = bytes
+        bytes
             .len()
             .checked_add(chunk.len())
             .filter(|length| *length <= max_bytes)
             .ok_or(Error::UpstreamChanged)?;
-        bytes.reserve(next_len.saturating_sub(bytes.len()));
         bytes.extend_from_slice(&chunk);
     }
     Ok(bytes)

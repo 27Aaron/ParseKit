@@ -6,13 +6,15 @@ use url::Url;
 use crate::{Error, Result};
 
 pub(crate) fn format_title(title: Option<&str>, fallback: &str) -> String {
-    title
+    let value = title
         .map(str::trim)
         .filter(|value| !value.is_empty())
-        .unwrap_or(fallback)
-        .chars()
-        .take(180)
-        .collect()
+        .unwrap_or(fallback);
+    let end = value
+        .char_indices()
+        .nth(180)
+        .map_or(value.len(), |(index, _)| index);
+    value[..end].to_owned()
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -228,15 +230,16 @@ impl MediaSource {
 
     /// One-line human summary for CLI / logs (no URL).
     pub fn quality_summary(&self) -> String {
-        let mut parts = vec![self.quality_label()];
+        let mut summary = self.quality_label();
+        summary.reserve(96);
         if let (Some(w), Some(h)) = (self.width, self.height) {
-            parts.push(format!("{w}×{h}"));
+            append_summary_part(&mut summary, format_args!("{w}×{h}"));
         }
         if let Some(bps) = self.bitrate_bps.filter(|v| *v > 0) {
-            parts.push(format_bitrate(bps));
+            append_bitrate(&mut summary, bps);
         }
         if let Some(bytes) = self.size_hint.filter(|v| *v > 0) {
-            parts.push(format_bytes_short(bytes));
+            append_bytes_short(&mut summary, bytes);
         }
         let codec = match self.codec {
             VideoCodec::H264 => Some("h264"),
@@ -244,19 +247,25 @@ impl MediaSource {
             VideoCodec::Unknown => None,
         };
         if let Some(codec) = codec {
-            parts.push(codec.into());
+            append_summary_part(&mut summary, codec);
         }
         match self.provenance {
             MediaSourceKind::H264 | MediaSourceKind::H265 => {}
-            MediaSourceKind::Direct => parts.push("origin".into()),
-            MediaSourceKind::Derived => parts.push("derived".into()),
-            MediaSourceKind::Generic => parts.push("generic".into()),
+            MediaSourceKind::Direct => append_summary_part(&mut summary, "origin"),
+            MediaSourceKind::Derived => append_summary_part(&mut summary, "derived"),
+            MediaSourceKind::Generic => append_summary_part(&mut summary, "generic"),
         }
         if self.decode_key.is_some() {
-            parts.push("encrypted".into());
+            append_summary_part(&mut summary, "encrypted");
         }
-        parts.join("  ·  ")
+        summary
     }
+}
+
+fn append_summary_part(summary: &mut String, part: impl fmt::Display) {
+    use fmt::Write as _;
+
+    write!(summary, "  ·  {part}").expect("writing to a String cannot fail");
 }
 
 /// Maps frame size to a common ladder tag using the shorter edge.
@@ -280,29 +289,32 @@ pub fn resolution_tier_label(width: Option<u32>, height: Option<u32>) -> Option<
     })
 }
 
-fn format_bitrate(bps: u64) -> String {
+fn append_bitrate(summary: &mut String, bps: u64) {
     if bps >= 1_000_000 {
-        format!("{:.1} Mbps", bps as f64 / 1_000_000.0)
+        append_summary_part(
+            summary,
+            format_args!("{:.1} Mbps", bps as f64 / 1_000_000.0),
+        );
     } else if bps >= 1_000 {
-        format!("{:.0} kbps", bps as f64 / 1_000.0)
+        append_summary_part(summary, format_args!("{:.0} kbps", bps as f64 / 1_000.0));
     } else {
-        format!("{bps} bps")
+        append_summary_part(summary, format_args!("{bps} bps"));
     }
 }
 
-fn format_bytes_short(bytes: u64) -> String {
+fn append_bytes_short(summary: &mut String, bytes: u64) {
     const KB: f64 = 1024.0;
     const MB: f64 = KB * 1024.0;
     const GB: f64 = MB * 1024.0;
     let n = bytes as f64;
     if n >= GB {
-        format!("{:.2} GB", n / GB)
+        append_summary_part(summary, format_args!("{:.2} GB", n / GB));
     } else if n >= MB {
-        format!("{:.1} MB", n / MB)
+        append_summary_part(summary, format_args!("{:.1} MB", n / MB));
     } else if n >= KB {
-        format!("{:.0} KB", n / KB)
+        append_summary_part(summary, format_args!("{:.0} KB", n / KB));
     } else {
-        format!("{bytes} B")
+        append_summary_part(summary, format_args!("{bytes} B"));
     }
 }
 
@@ -464,9 +476,11 @@ pub(crate) fn sanitize_filename_component(raw: &str) -> String {
     let mut out = String::with_capacity(raw.len().min(120));
     for ch in raw.chars().take(120) {
         match ch {
-            'a'..='z' | 'A'..='Z' | '0'..='9' | '-' | '_' => out.push(ch),
+            'a'..='z' | 'A'..='Z' | '0'..='9' | '-' => out.push(ch),
+            '_' if !out.is_empty() => out.push(ch),
+            '_' => {}
             _ => {
-                if !out.ends_with('_') {
+                if !out.is_empty() && !out.ends_with('_') {
                     out.push('_');
                 }
             }
@@ -474,9 +488,6 @@ pub(crate) fn sanitize_filename_component(raw: &str) -> String {
     }
     while out.ends_with('_') {
         out.pop();
-    }
-    while out.starts_with('_') {
-        out.remove(0);
     }
     out
 }
@@ -593,6 +604,30 @@ mod tests {
             post.require_primary_video().unwrap().url.as_str(),
             primary.url.as_str()
         );
+    }
+
+    #[test]
+    fn mutable_source_lookup_follows_media_source_order() {
+        let mut post = ResolvedPost::new_video(
+            PlatformId::Douyin,
+            "7661946724177829115",
+            Url::parse("https://www.douyin.com/video/7661946724177829115").unwrap(),
+            None,
+            None,
+            sample_source("primary.mp4"),
+            vec![sample_source("fallback.mp4")],
+        );
+        post.media.push(MediaItem::Image {
+            source: sample_source("cover.jpg"),
+        });
+
+        post.media_source_at_mut(1).unwrap().size_hint = Some(42);
+        assert_eq!(post.media_sources().nth(1).unwrap().size_hint, Some(42));
+        assert_eq!(
+            post.media_source_at_mut(2).unwrap().url.path(),
+            "/cover.jpg"
+        );
+        assert!(post.media_source_at_mut(3).is_none());
     }
 
     #[test]

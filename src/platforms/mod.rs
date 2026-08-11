@@ -96,11 +96,11 @@ pub const PLATFORM_SPECS: &[&PlatformSpec] = &[&wechat::SPEC, &douyin::SPEC, &bi
 
 /// Returns the registered spec for a stable platform id.
 pub fn platform_spec(id: PlatformId) -> &'static PlatformSpec {
-    PLATFORM_SPECS
-        .iter()
-        .copied()
-        .find(|spec| spec.id() == id)
-        .expect("every PlatformId must have a registered PlatformSpec")
+    match id {
+        PlatformId::Wechat => &wechat::SPEC,
+        PlatformId::Douyin => &douyin::SPEC,
+        PlatformId::Bilibili => &bilibili::SPEC,
+    }
 }
 
 /// Contract implemented by every platform resolver.
