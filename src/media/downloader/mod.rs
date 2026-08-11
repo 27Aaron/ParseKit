@@ -79,7 +79,7 @@ impl DownloadRequestIdentity {
     }
 }
 
-/// Cumulative progress reported at fixed thresholds when the length is known.
+/// Cumulative whole-percent download progress.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct DownloadProgress {
     pub downloaded_bytes: u64,
@@ -89,17 +89,13 @@ pub struct DownloadProgress {
 
 pub(super) type ProgressCallback = Arc<dyn Fn(DownloadProgress) + Send + Sync + 'static>;
 
-/// A completed download stored on disk.
-///
-/// Fresh downloads are deleted on drop unless retained with [`Self::into_path`]
-/// or [`Self::keep`]. Pre-existing reused files ([`Self::skipped`]) are never
-/// deleted on drop. Call [`Self::cleanup`] to remove a fresh download early.
+/// Downloaded file that removes new data on drop unless explicitly kept.
 #[derive(Debug)]
 #[must_use = "downloaded media must be uploaded, kept, or explicitly cleaned up"]
 pub struct DownloadedMedia {
     pub path: PathBuf,
     pub bytes: u64,
-    /// `true` when a complete local file was reused instead of re-downloading.
+    /// Whether an existing file was reused and retained on drop.
     pub skipped: bool,
     armed: bool,
 }
@@ -114,7 +110,7 @@ impl DownloadedMedia {
         }
     }
 
-    /// Reuses an on-disk file; drop will not delete it.
+    /// Wraps an existing file without taking cleanup ownership.
     pub(super) fn reused(path: PathBuf, bytes: u64) -> Self {
         Self {
             path,
@@ -135,13 +131,13 @@ impl DownloadedMedia {
         }
     }
 
-    /// Keeps the file and transfers ownership of its path to the caller.
+    /// Retains the file and returns its path.
     pub fn into_path(mut self) -> PathBuf {
         self.armed = false;
         std::mem::take(&mut self.path)
     }
 
-    /// Keeps the file and returns its path.
+    /// Alias for [`Self::into_path`].
     pub fn keep(self) -> PathBuf {
         self.into_path()
     }
@@ -156,9 +152,7 @@ impl DownloadedMedia {
 
             #[cfg(windows)]
             {
-                // Windows does not replace an existing destination atomically. Only
-                // remove a confirmed existing regular file after the first rename
-                // proves that a fallback is needed.
+                // Windows rename cannot replace a file; remove only a verified target.
                 match tokio::fs::symlink_metadata(&target).await {
                     Ok(metadata) if metadata.is_file() => {}
                     Ok(_) => return Err(Error::Storage(target)),
@@ -197,7 +191,6 @@ pub struct MediaDownloader {
     request_identity: DownloadRequestIdentity,
     disk_write_budget: Arc<StdMutex<DiskWriteBudget>>,
     file_stem: Option<Arc<str>>,
-    /// When set (default), reuse a complete local file with the same stem.
     skip_existing: bool,
 }
 
@@ -282,7 +275,7 @@ impl MediaDownloader {
         self.file_stem.as_deref()
     }
 
-    /// When `true` (default), reuse a complete local file for the same stem.
+    /// Controls complete-file reuse; enabled by default.
     pub fn with_skip_existing(mut self, skip_existing: bool) -> Self {
         self.skip_existing = skip_existing;
         self
@@ -292,7 +285,7 @@ impl MediaDownloader {
         self.skip_existing
     }
 
-    /// Clones this downloader with a tighter request timeout.
+    /// Clones the downloader with a timeout no greater than the current limit.
     pub fn with_timeout(&self, request_timeout: Duration) -> Result<Self> {
         if request_timeout.is_zero() {
             return Err(Error::Config("媒体下载超时必须大于零".to_owned()));
@@ -312,7 +305,7 @@ impl MediaDownloader {
         self.download_indexed(source, 0).await
     }
 
-    /// Downloads one source using a multi-file sequence suffix (`_1`, `_2`, …).
+    /// Downloads one source with a multi-file sequence suffix.
     pub async fn download_indexed(
         &self,
         source: &MediaSource,
@@ -327,7 +320,7 @@ impl MediaDownloader {
             .await
     }
 
-    /// Downloads each source to a separate file; cleans up earlier files on failure.
+    /// Downloads each source separately and rolls back new files on failure.
     pub async fn download_all<'a, I>(&self, sources: I) -> Result<Vec<DownloadedMedia>>
     where
         I: IntoIterator<Item = &'a MediaSource>,
@@ -360,9 +353,7 @@ impl MediaDownloader {
         .await
     }
 
-    /// Tries sources in order until one yields playable media.
-    ///
-    /// Sources with a `decode_key` are decrypted while written and validated as BMFF.
+    /// Tries sources in order, decrypting and validating keyed BMFF media.
     pub async fn download_playable<'a, I>(&self, sources: I) -> Result<DownloadedMedia>
     where
         I: IntoIterator<Item = &'a MediaSource>,
@@ -370,8 +361,9 @@ impl MediaDownloader {
         self.download_playable_with_progress(sources, |_| {}).await
     }
 
-    /// Like [`Self::download_playable`], reporting whole-percent progress when
-    /// the response length is known. The callback should return promptly.
+    /// Adds whole-percent progress to [`Self::download_playable`].
+    ///
+    /// The synchronous callback should return promptly.
     pub async fn download_playable_with_progress<'a, I, F>(
         &self,
         sources: I,
@@ -425,7 +417,7 @@ impl MediaDownloader {
         .await
     }
 
-    /// Downloads one source and reports whole-percent progress when length is known.
+    /// Downloads one source with whole-percent progress when length is known.
     ///
     /// The synchronous callback should return promptly.
     pub async fn download_with_progress<F>(
@@ -440,7 +432,7 @@ impl MediaDownloader {
             .await
     }
 
-    /// Like [`Self::download_with_progress`] with a multi-file sequence suffix.
+    /// Adds a sequence suffix to [`Self::download_with_progress`].
     pub async fn download_indexed_with_progress<F>(
         &self,
         source: &MediaSource,
@@ -478,9 +470,7 @@ impl MediaDownloader {
         decode_key: Option<u64>,
         sequence: u32,
     ) -> Result<DownloadedMedia> {
-        // Reuse one path across retries so unencrypted downloads can resume.
-        // Encrypted prefixes must restart from byte zero.
-        // Create the workspace only after URL/host validation succeeds (in stream_response).
+        // Stable paths enable resume; encrypted prefixes always restart.
         let preferred_ext = extension_from_url(url);
         if self.skip_existing
             && let Some((existing, bytes)) = existing_complete_download(
@@ -558,37 +548,33 @@ impl MediaDownloader {
         path: PathBuf,
         mut resume_from: u64,
     ) -> Result<DownloadedMedia> {
-        // Allow one full restart when a server ignores `Range`.
+        // Permit one clean restart when resume is unsupported.
         for _ in 0..2 {
             let response = self.follow_redirects(url.clone(), resume_from).await?;
             let status = response.status();
             if resume_from > 0 && status == reqwest::StatusCode::RANGE_NOT_SATISFIABLE {
-                // The local partial may be stale or already at the remote length.
-                // A clean retry is safer than appending or treating it as complete.
+                // A 416 makes the local partial untrustworthy.
                 let _ = tokio::fs::remove_file(&path).await;
                 resume_from = 0;
                 continue;
             }
             let Some(next_resume) = effective_resume_offset(resume_from, status) else {
-                // A status without resume semantics is handled as an error.
                 return check_response_status(status)
                     .map(|()| unreachable!("successful status should yield a resume offset"));
             };
             if resume_from > 0 && next_resume == 0 {
-                // The server ignored `Range`; discard the partial file and retry once.
+                // The server ignored `Range`; retry without the partial file.
                 let _ = tokio::fs::remove_file(&path).await;
                 resume_from = 0;
                 continue;
             }
             resume_from = next_resume;
-            // Resumed requests accept 206; fresh requests still require 200.
             if !(resume_from > 0 && status == reqwest::StatusCode::PARTIAL_CONTENT) {
                 check_response_status(status)?;
             }
             reject_encoded_response(&response)?;
 
-            // Keep the provisional path stable until the download is complete so a
-            // failed extension-less transfer can resume on the next attempt.
+            // Rename extension-less files only after a complete transfer.
             let mut completed_path = path.clone();
             if let Some(ext) = response
                 .headers()
@@ -598,7 +584,7 @@ impl MediaDownloader {
             {
                 completed_path = path_with_better_extension(completed_path, ext);
             }
-            // Encrypted WeChat prefixes are always BMFF video containers.
+            // Keyed WeChat media is BMFF video.
             if decode_key.is_some() {
                 completed_path = path_with_better_extension(completed_path, "mp4");
             }
@@ -613,8 +599,7 @@ impl MediaDownloader {
                             .is_none_or(|length| range.response_length() == Some(length))
                 });
                 if !valid_range {
-                    // A non-conforming range response cannot be appended safely.
-                    // Discard the partial and make the loop's one clean request.
+                    // Never append a non-conforming range response.
                     let _ = tokio::fs::remove_file(&path).await;
                     resume_from = 0;
                     continue;
@@ -650,7 +635,7 @@ impl MediaDownloader {
         for redirect_count in 0..=MAX_REDIRECTS {
             let host = validate_media_url(&current, &self.allowed_hosts)?.to_ascii_lowercase();
             let port = current.port_or_known_default().unwrap_or(443);
-            // Pin per host:port so CDN edges on :20443 etc. connect to the right socket.
+            // Pin each host and port independently.
             let client_key = format!("{host}:{port}");
             if !pinned_clients.contains_key(&client_key) {
                 let addresses = resolve_public_addresses(&host, port).await?;
@@ -726,7 +711,7 @@ impl MediaDownloader {
         resume_from: u64,
     ) -> Result<DownloadedMedia> {
         let (content_length, ranged_response_length) = length_hints;
-        // Only create the workspace once we have a validated response to write.
+        // Delay filesystem changes until the response is validated.
         if let Some(parent) = path.parent() {
             tokio::fs::create_dir_all(parent)
                 .await
@@ -742,7 +727,7 @@ impl MediaDownloader {
         let disk_write_budget = Arc::clone(&self.disk_write_budget);
         let (progress_reporter, _progress_guard) =
             ProgressReporter::new(content_length, progress_callback, resume_from);
-        // Decryption starts at byte zero, so resumed writes never initialize XOR state.
+        // Prefix decryption is not resumable.
         let prefix_xor = if resume_from == 0 {
             decode_key.map(crate::platforms::wechat::PrefixXor::new)
         } else {
@@ -793,13 +778,12 @@ impl MediaDownloader {
             }
         };
 
-        // Prefer the writer's concrete I/O/storage error when both halves fail.
+        // Prefer the writer's concrete storage error.
         let outcome = writer_result?;
         if let Err(error) = stream_result {
             if decode_key.is_none() && outcome.media.bytes > 0 && matches!(error, Error::Network(_))
             {
-                // Keep a valid unencrypted prefix for the retry closure. The outer
-                // operation removes it if all retries ultimately fail.
+                // Retain an unencrypted prefix for the next retry.
                 let _ = outcome.media.into_path();
             }
             return Err(error);

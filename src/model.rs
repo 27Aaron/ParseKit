@@ -38,7 +38,7 @@ impl PlatformId {
         }
     }
 
-    /// PascalCase prefix for download filenames (`Wechat_…`, `Douyin_…`).
+    /// Filename prefix such as `Wechat` or `Douyin`.
     pub const fn file_prefix(self) -> &'static str {
         match self {
             Self::Wechat => "Wechat",
@@ -163,7 +163,7 @@ impl MediaItem {
 }
 
 impl ResolvedPost {
-    /// Mutable access to the n-th media source in [`Self::media_sources`] order.
+    /// Returns the mutable source at `index` in [`Self::media_sources`] order.
     pub fn media_source_at_mut(&mut self, index: usize) -> Option<&mut MediaSource> {
         let mut remaining = index;
         for item in &mut self.media {
@@ -199,14 +199,14 @@ pub struct MediaSource {
     pub height: Option<u32>,
     pub size_hint: Option<u64>,
     pub decode_key: Option<u64>,
-    /// Human quality tag when known (`1080p`, `qn80`, `H265`, …).
+    /// Human-readable quality tag, when known.
     pub label: Option<String>,
-    /// Approximate bitrate in bits per second when known.
+    /// Approximate bitrate in bits per second.
     pub bitrate_bps: Option<u64>,
 }
 
 impl MediaSource {
-    /// Builds a display label: prefer explicit [`Self::label`], else resolution tier.
+    /// Returns the explicit label or a resolution-derived fallback.
     pub fn quality_label(&self) -> String {
         if let Some(label) = self
             .label
@@ -228,7 +228,7 @@ impl MediaSource {
         }
     }
 
-    /// One-line human summary for CLI / logs (no URL).
+    /// Returns a one-line, URL-free quality summary.
     pub fn quality_summary(&self) -> String {
         let mut summary = self.quality_label();
         summary.reserve(96);
@@ -268,7 +268,7 @@ fn append_summary_part(summary: &mut String, part: impl fmt::Display) {
     write!(summary, "  ·  {part}").expect("writing to a String cannot fail");
 }
 
-/// Maps frame size to a common ladder tag using the shorter edge.
+/// Maps the shorter frame edge to a common resolution tier.
 pub fn resolution_tier_label(width: Option<u32>, height: Option<u32>) -> Option<&'static str> {
     let short = match (width, height) {
         (Some(w), Some(h)) => w.min(h),
@@ -336,9 +336,7 @@ impl fmt::Debug for MediaSource {
     }
 }
 
-/// A normalized post returned by a platform resolver.
-///
-/// Use [`Self::new_video`] or [`Self::new_image_set`] to keep `kind` and `media` consistent.
+/// Normalized platform post with validated media invariants.
 #[derive(Clone)]
 pub struct ResolvedPost {
     pub platform: PlatformId,
@@ -415,7 +413,7 @@ impl ResolvedPost {
         })
     }
 
-    /// Iterates sources in playback order: primary, fallbacks, then other items.
+    /// Iterates primary, fallback, then remaining media sources.
     pub fn media_sources(&self) -> impl Iterator<Item = &MediaSource> {
         self.media.iter().flat_map(MediaItem::iter_sources)
     }
@@ -426,7 +424,7 @@ impl ResolvedPost {
             .find_map(|item| item.as_video().map(|(primary, _)| primary))
     }
 
-    /// Returns fallback sources for the first video item, excluding its primary source.
+    /// Returns fallback sources for the first video item.
     pub fn video_fallbacks(&self) -> &[MediaSource] {
         self.media
             .iter()
@@ -446,7 +444,7 @@ impl ResolvedPost {
         format_title(self.title.as_deref(), fallback)
     }
 
-    /// `{platform}_{canonical_path_slug}` without extension.
+    /// Returns `{platform}_{canonical_path_slug}` without an extension.
     pub fn download_file_stem(&self) -> String {
         download_file_stem(self.platform, &self.canonical_url, &self.post_id)
     }

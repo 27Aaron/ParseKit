@@ -23,7 +23,7 @@ pub use login::{
 pub use resolver::{WechatCredentialStatus, WechatResolver, assess_yuanbao_cookie};
 pub use share::{derive_direct_media_url, extract_share_url};
 
-/// Complete static registration for the WeChat Channels adapter.
+/// Static WeChat Channels adapter registration.
 pub const SPEC: PlatformSpec = PlatformSpec::new(
     PlatformId::Wechat,
     "needs YUANBAO_COOKIE (pk wechat login)",

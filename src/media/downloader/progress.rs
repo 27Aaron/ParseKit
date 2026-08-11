@@ -7,11 +7,10 @@ use std::sync::{
 
 use super::{DownloadProgress, ProgressCallback};
 
-/// Emit progress at every whole percent (1..=100) when total length is known.
+/// Reports each whole percentage when the total length is known.
 pub(super) struct ProgressReporter {
     callback: ProgressCallback,
     total_bytes: u64,
-    /// Next whole percent to emit (1..=100).
     next_percent: u16,
     active: Arc<AtomicBool>,
 }
@@ -36,8 +35,7 @@ impl ProgressReporter {
             Some(Self {
                 callback,
                 total_bytes,
-                // A resumed download must not replay progress thresholds that the
-                // partial file has already crossed.
+                // Resume after thresholds already represented on disk.
                 next_percent: already_reached.saturating_add(1),
                 active: Arc::clone(&active),
             }),

@@ -11,7 +11,7 @@ pub use crate::url::{URL_TRAILING_PUNCT, trim_url_candidate};
 pub const DEFAULT_RESOLVE_TIMEOUT: Duration = Duration::from_secs(30);
 const DEFAULT_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 
-/// Builds the baseline HTTP client used by platform resolvers.
+/// Builds a resolver client with redirects disabled.
 pub fn resolver_http_client(timeout: Duration, config_error: &str) -> Result<Client> {
     Client::builder()
         .connect_timeout(DEFAULT_CONNECT_TIMEOUT)
@@ -22,7 +22,7 @@ pub fn resolver_http_client(timeout: Duration, config_error: &str) -> Result<Cli
         .map_err(|_| Error::Config(config_error.to_owned()))
 }
 
-/// Applies the resolver-wide timeout shared by all platform adapters.
+/// Applies a resolver-wide timeout.
 pub async fn resolve_with_timeout<T>(
     timeout: Duration,
     future: impl Future<Output = Result<T>>,
@@ -33,7 +33,7 @@ pub async fn resolve_with_timeout<T>(
         .map_err(|_| Error::Network(timeout_message.to_owned()))?
 }
 
-/// Maps a request failure without formatting it, which could expose signed URLs.
+/// Maps request failures without exposing signed URLs.
 pub fn map_network_error(error: &reqwest::Error, timeout_msg: &str, fail_msg: &str) -> Error {
     if error.is_timeout() {
         Error::Network(timeout_msg.into())
@@ -64,9 +64,7 @@ pub async fn read_body_limited(
         return Err(Error::UpstreamChanged);
     }
 
-    // A trustworthy, bounded Content-Length lets the common one-chunk case
-    // allocate exactly once. The streaming limit below remains authoritative
-    // when the header is absent or inaccurate.
+    // Preallocate only from a bounded Content-Length.
     let initial_capacity = content_length
         .and_then(|length| usize::try_from(length).ok())
         .filter(|length| *length <= max_bytes)

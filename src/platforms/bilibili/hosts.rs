@@ -5,7 +5,7 @@ use crate::media::DownloadRequestIdentity;
 pub(super) const USER_AGENT_VALUE: &str = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) \
     AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36";
 
-/// Reviewed media hosts; a leading dot matches subdomains only.
+/// Reviewed media hosts; dot-prefixed entries match subdomains.
 pub const REVIEWED_MEDIA_HOSTS: &[&str] = &[
     ".bilivideo.com",
     ".bilivideo.cn",

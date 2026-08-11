@@ -2,7 +2,7 @@
 
 use crate::media::DownloadRequestIdentity;
 
-/// Exact-match CDN hosts reviewed for media downloads.
+/// Reviewed exact-match media hosts.
 pub const REVIEWED_MEDIA_HOSTS: &[&str] = &[
     "finder.video.qq.com",
     "findermp.video.qq.com",

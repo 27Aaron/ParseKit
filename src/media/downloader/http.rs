@@ -44,7 +44,7 @@ where
 }
 
 pub(super) fn is_transient_download_error(error: &Error) -> bool {
-    // Rate limits use the fixed retry schedule until `Retry-After` is supported.
+    // Retry rate limits on the fixed transient schedule.
     matches!(error, Error::Network(_) | Error::RateLimited)
 }
 
@@ -111,8 +111,7 @@ impl ContentRange {
     }
 }
 
-/// Parses the two HTTP forms used by media servers:
-/// `bytes START-END/TOTAL` and the unsatisfied form `bytes */TOTAL`.
+/// Parses satisfied and unsatisfied byte `Content-Range` values.
 pub(super) fn parse_content_range(headers: &HeaderMap) -> Option<ContentRange> {
     let raw = headers.get(CONTENT_RANGE)?.to_str().ok()?.trim();
     let (unit, value) = raw.split_once(' ')?;

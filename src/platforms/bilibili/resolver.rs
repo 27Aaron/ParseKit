@@ -36,11 +36,10 @@ const MAX_SHORTLINK_REDIRECTS: usize = 8;
 const VIEW_API: &str = "https://api.bilibili.com/x/web-interface/view";
 const PLAYURL_API: &str = "https://api.bilibili.com/x/player/playurl";
 
-/// Progressive then DASH for anonymous traffic (progressive often tops out at 720P).
+/// Anonymous ladder: progressive first, then DASH.
 const ANON_PLAY_ATTEMPTS: &[(u32, u32)] =
     &[(1, 80), (1, 64), (1, 32), (16, 80), (80, 80), (4048, 80)];
-/// Logged-in ladder: one rich DASH probe, then progressive as a muxed-MP4 option.
-/// Progressive rarely exceeds 720P even with SESSDATA; DASH unlocks 1080P+.
+/// Authenticated ladder: DASH first, then muxed progressive.
 const AUTH_PLAY_ATTEMPTS: &[(u32, u32)] = &[(4048, 127), (80, 112), (1, 80)];
 
 #[derive(Clone)]
@@ -61,12 +60,12 @@ impl std::fmt::Debug for BilibiliResolver {
 }
 
 impl BilibiliResolver {
-    /// Anonymous resolver (no cookie); public videos still work, often limited quality.
+    /// Creates an anonymous resolver with public quality limits.
     pub fn new() -> Result<Self> {
         Self::with_cookie_opt(None)
     }
 
-    /// Resolver with an optional Cookie header (typically `BILIBILI_COOKIE` / SESSDATA).
+    /// Creates a resolver with an optional Cookie header.
     pub fn with_cookie(cookie: impl Into<String>) -> Result<Self> {
         let cookie = cookie.into();
         let cred = CookieCredential::new(cookie)
@@ -84,7 +83,7 @@ impl BilibiliResolver {
         })
     }
 
-    /// Local cookie shape check (no network).
+    /// Returns the locally inferred credential state.
     pub fn credential_status(&self) -> CredentialStatus {
         match &self.cookie {
             None => CredentialStatus::Absent,
@@ -100,7 +99,7 @@ impl BilibiliResolver {
         }
     }
 
-    /// Whether a session cookie is attached to API requests.
+    /// Returns whether API requests include a session cookie.
     pub fn is_authenticated(&self) -> bool {
         matches!(self.credential_status(), CredentialStatus::Present)
     }
@@ -193,12 +192,7 @@ impl BilibiliResolver {
             .ok_or(Error::UpstreamChanged)
     }
 
-    /// Requests playurl ladders and merges progressive + DASH sources.
-    ///
-    /// Progressive (`fnval=1`) is a single muxed MP4 and is convenient, but even with
-    /// login it often caps at 720P. Higher tiers (1080P+) almost always require DASH
-    /// (`fnval` 16/80/4048). When authenticated we therefore keep collecting after the
-    /// first progressive hit instead of returning early.
+    /// Merges muxed progressive and authenticated DASH ladders.
     pub(super) async fn request_play_sources(
         &self,
         bvid: &str,
@@ -215,7 +209,7 @@ impl BilibiliResolver {
         let mut seen_urls = HashSet::new();
         let mut got_dash = false;
         for &(fnval, qn) in attempts {
-            // After a successful DASH payload, only still need progressive (fnval=1).
+            // After DASH succeeds, only the muxed progressive option remains useful.
             if authenticated && got_dash && fnval != 1 {
                 continue;
             }
@@ -231,7 +225,7 @@ impl BilibiliResolver {
                     if fnval != 1 && added {
                         got_dash = true;
                     }
-                    // Anonymous: progressive alone is enough for a quick download.
+                    // Anonymous resolution stops after the first progressive source.
                     if !authenticated && fnval == 1 && !collected.is_empty() {
                         return Ok(collected);
                     }
@@ -321,7 +315,7 @@ fn map_status(status: StatusCode) -> Result<()> {
     }
 }
 
-/// Keep one stream per quality key (label + dimensions), highest bitrate first.
+/// Keeps the highest-bitrate stream for each quality key.
 fn dedupe_and_rank_play_sources(sources: Vec<MediaSource>) -> Vec<MediaSource> {
     let mut ranked = sources;
     ranked.sort_by(|a, b| {

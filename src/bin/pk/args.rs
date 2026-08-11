@@ -11,7 +11,7 @@ use clap::{Parser, Subcommand, ValueEnum};
     about = "ParseKit CLI — resolve and download social media posts"
 )]
 pub struct Cli {
-    /// Write tracing logs to stderr; respect RUST_LOG when set.
+    /// Enable tracing; uses RUST_LOG when set.
     #[arg(long, short = 'v', global = true)]
     pub verbose: bool,
 
@@ -41,13 +41,13 @@ pub enum Commands {
     Download {
         /// Share URL or pasted share text.
         input: String,
-        /// Output directory; defaults to PARSE_KIT_OUTPUT_DIR or ./downloads.
+        /// Output directory; defaults to `PARSE_KIT_OUTPUT_DIR` or `./downloads`.
         #[arg(short, long)]
         output: Option<PathBuf>,
         /// Order for automatic source selection.
         #[arg(long, value_enum, default_value_t = Prefer::Best)]
         prefer: Prefer,
-        /// Download one source by its zero-based index from pk resolve.
+        /// Download one source by its zero-based `pk resolve` index.
         #[arg(long)]
         source: Option<usize>,
         /// Download only the first image in an image set.
@@ -82,21 +82,21 @@ pub enum Commands {
 
 #[derive(Debug, Subcommand)]
 pub enum BilibiliCmd {
-    /// Scan a QR code with the Bilibili app; save cookie to `.env.local`.
+    /// Scan with Bilibili and save the cookie to `.env.local`.
     Login,
     /// Remove `BILIBILI_COOKIE` from `.env.local`.
     Logout,
-    /// Show whether a Bilibili cookie is loaded (local shape only).
+    /// Check the local Bilibili cookie shape.
     Status,
 }
 
 #[derive(Debug, Subcommand)]
 pub enum WechatCmd {
-    /// Scan a QR code with WeChat; save the Yuanbao cookie to `.env.local`.
+    /// Scan with WeChat and save the Yuanbao cookie to `.env.local`.
     Login,
     /// Remove `YUANBAO_COOKIE` from `.env.local`.
     Logout,
-    /// Show whether a Yuanbao cookie is loaded (local shape only).
+    /// Check the local Yuanbao cookie shape.
     Status,
 }
 

@@ -1,5 +1,3 @@
-//! Tests for the Bilibili resolver.
-
 use super::{
     BilibiliResolver, extract_share_url,
     parse::{build_post_from_payloads, collect_play_sources},
@@ -67,7 +65,6 @@ fn collects_dash_video_by_bandwidth() {
         }
     });
     let sources = collect_play_sources(&play);
-    // Primary URLs only (backups omitted to keep the picker small).
     assert_eq!(sources.len(), 2);
     assert!(sources[0].url.as_str().contains("high"));
     assert_eq!(sources[0].width, Some(1920));

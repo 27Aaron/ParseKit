@@ -6,7 +6,7 @@ use tokio::{fs::OpenOptions, io::AsyncReadExt};
 
 use crate::Result;
 
-/// Returns `true` when `data` starts with a recognizable BMFF box sequence.
+/// Checks whether `data` starts with a valid BMFF box sequence.
 pub fn looks_like_bmff(data: &[u8]) -> bool {
     let mut offset = 0_usize;
     for _ in 0..16 {
@@ -48,7 +48,7 @@ pub fn looks_like_bmff(data: &[u8]) -> bool {
     false
 }
 
-/// Reads at most `max_bytes` from `path` and checks the prefix for BMFF boxes.
+/// Checks at most `max_bytes` of a file for BMFF boxes.
 pub async fn prefix_looks_like_bmff(path: &Path, max_bytes: usize) -> Result<bool> {
     let file = OpenOptions::new().read(true).open(path).await?;
     let max_bytes = u64::try_from(max_bytes).unwrap_or(u64::MAX);
@@ -58,15 +58,14 @@ pub async fn prefix_looks_like_bmff(path: &Path, max_bytes: usize) -> Result<boo
         return Ok(false);
     }
     let mut prefix = Vec::with_capacity(length);
-    // Read through a limit rather than relying on the earlier metadata length:
-    // the file may be concurrently truncated between metadata and I/O.
+    // A limited read tolerates concurrent truncation after metadata lookup.
     file.take(u64::try_from(length).expect("length fits u64"))
         .read_to_end(&mut prefix)
         .await?;
     Ok(looks_like_bmff(&prefix))
 }
 
-/// Checks the standard 128 KiB media prefix for BMFF boxes.
+/// Checks the standard 128 KiB prefix for BMFF boxes.
 pub async fn file_prefix_looks_like_bmff(path: &Path) -> Result<bool> {
     prefix_looks_like_bmff(path, 128 * 1024).await
 }

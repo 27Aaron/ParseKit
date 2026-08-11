@@ -48,7 +48,7 @@ const EXISTING_MEDIA_EXTS: &[&str] = &[
     "webp", "gif", "avif", "heic", "mp3", "m4a", "aac", "ogg", "bin",
 ];
 
-/// Looks for a complete on-disk file for `{stem}` / `{stem}_{n}` under `directory`.
+/// Finds a reusable `{stem}` or `{stem}_{n}` file in `directory`.
 pub(super) async fn existing_complete_download(
     directory: &Path,
     file_stem: Option<&str>,
@@ -73,8 +73,7 @@ pub(super) async fn existing_complete_download(
 
     for ext in exts {
         let path = directory.join(format!("{base}.{ext}"));
-        // Never reuse a symlink: callers should only receive regular files that
-        // are actually contained in the download workspace.
+        // Reuse only regular files owned by the workspace path.
         let Ok(meta) = tokio::fs::symlink_metadata(&path).await else {
             continue;
         };
@@ -89,7 +88,6 @@ pub(super) async fn existing_complete_download(
             if len >= hint && has_recognizable_media_header(&path).await {
                 return Some((path, len));
             }
-            // Incomplete relative to size_hint — allow resume/re-download.
             continue;
         }
         if looks_like_complete_media(&path, len).await {
@@ -161,10 +159,7 @@ fn looks_like_mpeg_audio_frame(header: &[u8]) -> bool {
     version != 0x08 && layer != 0 && !matches!(bitrate, 0 | 0xf0) && sample_rate != 0x0c
 }
 
-/// Infers a safe extension from the media URL, falling back to `bin`.
-///
-/// WeChat Channels CDN paths are often extension-less (`…/stodownload?…`);
-/// Douyin uses `…/play/?video_id=…`. Prefer a real path suffix when present.
+/// Infers a safe URL extension, falling back to `bin`.
 pub(super) fn extension_from_url(url: &url::Url) -> &'static str {
     let path = url.path().to_ascii_lowercase();
     if let Some(ext) = extension_from_path_segment(&path) {
@@ -172,7 +167,7 @@ pub(super) fn extension_from_url(url: &url::Url) -> &'static str {
     }
 
     let query = url.query().unwrap_or("").to_ascii_lowercase();
-    // finder.video.qq.com/…/stodownload — video vs cover distinguished by query.
+    // Extension-less WeChat media is identified by signed video query keys.
     if path.contains("stodownload") {
         if query.contains("picformat") || query.contains("wxampic") {
             return "jpg";
@@ -225,7 +220,7 @@ fn extension_from_path_segment(path: &str) -> Option<&'static str> {
     })
 }
 
-/// Maps a response `Content-Type` to a file extension when the URL had none.
+/// Maps a supported `Content-Type` to a file extension.
 pub(super) fn extension_from_content_type(value: &str) -> Option<&'static str> {
     let mime = value
         .split(';')
@@ -255,7 +250,7 @@ pub(super) fn extension_from_content_type(value: &str) -> Option<&'static str> {
     })
 }
 
-/// Prefer a real extension over a provisional `bin` name.
+/// Replaces a provisional `bin` extension.
 pub(super) fn path_with_better_extension(path: PathBuf, preferred: &str) -> PathBuf {
     if preferred.is_empty() || preferred == "bin" {
         return path;
@@ -271,9 +266,7 @@ pub(super) fn path_with_better_extension(path: PathBuf, preferred: &str) -> Path
     }
 }
 
-/// Returns the safe resume offset for a response, or `None` if it cannot resume.
-///
-/// An offset of zero means the destination must be rewritten from the start.
+/// Returns the append offset, zero for restart, or `None` for rejection.
 pub(super) fn effective_resume_offset(requested: u64, status: reqwest::StatusCode) -> Option<u64> {
     use reqwest::StatusCode;
     if requested == 0 {
@@ -283,7 +276,6 @@ pub(super) fn effective_resume_offset(requested: u64, status: reqwest::StatusCod
         return Some(requested);
     }
     if status == StatusCode::OK {
-        // A 200 response ignored `Range`; restart from byte zero.
         return Some(0);
     }
     None
@@ -296,8 +288,7 @@ pub(super) fn ensure_free_disk_space(directory: &Path, pending_write_bytes: u64)
     let path = CString::new(directory.as_os_str().as_bytes())
         .map_err(|_| Error::Storage(directory.to_owned()))?;
     let mut statistics = MaybeUninit::<libc::statvfs>::uninit();
-    // SAFETY: `path` is a valid NUL-terminated C string, and `statistics`
-    // points to aligned, writable memory for `statvfs` to initialize.
+    // SAFETY: `path` is NUL-terminated and `statistics` is valid writable storage.
     if unsafe { libc::statvfs(path.as_ptr(), statistics.as_mut_ptr()) } != 0 {
         return Err(Error::Storage(directory.to_owned()));
     }

@@ -12,7 +12,7 @@ use crate::{
 
 const MAX_JSON_BYTES: usize = 2 * 1024 * 1024;
 
-/// Cookie lookup; prefers non-empty values (matches historical WeChat behavior).
+/// Returns a non-empty cookie value.
 pub(super) fn cookie_value(cookie: &str, name: &str) -> Option<String> {
     shared_cookie_value(cookie, name).filter(|value| !value.is_empty())
 }

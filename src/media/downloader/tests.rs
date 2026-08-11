@@ -1,5 +1,3 @@
-//! Tests for `MediaDownloader`.
-
 use std::{
     collections::HashSet,
     fs::OpenOptions,
@@ -29,7 +27,6 @@ fn allowed_hosts() -> HashSet<String> {
     normalize_allowed_hosts(platforms::wechat::REVIEWED_MEDIA_HOSTS.iter().copied()).unwrap()
 }
 
-/// Ephemeral workspace under the system temp dir (never the repo root).
 fn test_workspace() -> std::path::PathBuf {
     std::env::temp_dir().join(format!("parse-kit-test-{}", Uuid::new_v4().hyphenated()))
 }
@@ -193,7 +190,6 @@ async fn retries_only_transient_download_failures() {
     .await
     .unwrap_err();
     assert!(matches!(error, Error::RateLimited));
-    // Rate limits follow the same fixed schedule as transient network failures.
     assert_eq!(rate_limited_attempts.load(Ordering::SeqCst), 3);
 }
 
@@ -337,7 +333,6 @@ fn accepts_only_reviewed_https_media_urls() {
         assert!(validate_media_url(&url, &allowed).is_err(), "{raw}");
     }
 
-    // CDN edges may serve media on non-443 HTTPS ports.
     let non_default_port =
         Url::parse("https://finder.video.qq.com:20443/path?token=secret").unwrap();
     assert_eq!(
@@ -473,7 +468,6 @@ fn reports_each_crossed_threshold_once_after_writes() {
         std::fs::read(&outcome.media.path).unwrap(),
         (1_u8..=8).collect::<Vec<_>>()
     );
-    // 2/8 → 25%, 6/8 → 75%, 8/8 intermediate still max 99 until complete.
     let percents: Vec<u8> = events.lock().unwrap().iter().map(|e| e.percent).collect();
     assert!(percents.contains(&20));
     assert!(percents.contains(&25));
@@ -598,7 +592,6 @@ fn extension_from_url_guesses_common_types() {
         extension_from_url(&Url::parse("https://x/play/?video_id=1").unwrap()),
         "mp4"
     );
-    // WeChat Channels CDN: extension-less stodownload paths.
     assert_eq!(
         extension_from_url(
             &Url::parse("https://finder.video.qq.com/251/20302/stodownload?encfilekey=k&token=t")
@@ -680,7 +673,6 @@ fn path_with_better_extension_only_upgrades_bin() {
 async fn existing_complete_download_reuses_bmff_file() {
     let dir = test_workspace();
     std::fs::create_dir_all(&dir).unwrap();
-    // Minimal ftyp box (size 16, type ftyp) + padding so length >= 1024.
     let mut bytes = vec![
         0, 0, 0, 16, b'f', b't', b'y', b'p', b'i', b's', b'o', b'm', 0, 0, 0, 0,
     ];
@@ -694,14 +686,12 @@ async fn existing_complete_download_reuses_bmff_file() {
     assert_eq!(found.0, path);
     assert_eq!(found.1, 2048);
 
-    // Smaller than size_hint → treat as incomplete.
     assert!(
         existing_complete_download(dir.as_path(), Some("wechat_demo"), 0, "mp4", Some(4096))
             .await
             .is_none()
     );
 
-    // Matching length alone must not make an unrelated/corrupt file reusable.
     let invalid = dir.join("invalid.mp4");
     std::fs::write(&invalid, vec![b'x'; 2048]).unwrap();
     assert!(

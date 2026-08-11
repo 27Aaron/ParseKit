@@ -66,9 +66,7 @@ impl std::fmt::Debug for WechatResolver {
     }
 }
 
-/// Local assessment of Yuanbao cookie markers.
-///
-/// Prefer [`CredentialStatus`] for new code; this alias keeps older call sites working.
+/// Legacy alias for local Yuanbao credential state.
 pub type WechatCredentialStatus = CredentialStatus;
 
 impl WechatResolver {
@@ -80,11 +78,7 @@ impl WechatResolver {
         )
     }
 
-    /// Local cookie shape check (no network).
-    ///
-    /// Returns [`CredentialStatus::Present`] when `hy_user` / session tokens look set;
-    /// [`CredentialStatus::Incomplete`] otherwise. Never returns `Absent` (resolver always
-    /// holds a cookie string).
+    /// Returns the locally inferred credential state.
     pub fn credential_status(&self) -> CredentialStatus {
         assess_yuanbao_cookie(self.cookie.as_str())
     }
@@ -114,7 +108,7 @@ impl WechatResolver {
         })
     }
 
-    /// Cookie header value for outbound requests (redacted in Debug).
+    /// Returns the outbound Cookie header value.
     pub fn cookie_header(&self) -> &str {
         self.cookie.as_str()
     }
@@ -293,7 +287,7 @@ impl WechatResolver {
     }
 }
 
-/// Local shape check for a Yuanbao cookie header (no network).
+/// Infers Yuanbao credential state without network access.
 pub fn assess_yuanbao_cookie(cookie: &str) -> CredentialStatus {
     let trimmed = cookie.trim();
     if trimmed.is_empty() {

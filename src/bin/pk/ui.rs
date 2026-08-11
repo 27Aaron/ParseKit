@@ -1,14 +1,4 @@
-//! Interactive TTY mode streams status rows with a short spin→✓ reveal so the
-//! log feels smooth rather than dumping all at once:
-//!
-//! ```text
-//! ✓  platform       douyin
-//! ✓  post_id        7661…
-//! ✓  title          …
-//! ✓  kind           Video
-//! ✓  canonical      https://…
-//! ✓  source[0]      origin · unknown · key=no
-//! ```
+//! Terminal output, progress animation, and display-width helpers.
 
 use std::{
     env,
@@ -31,14 +21,13 @@ const ICON_OK: &str = "✓";
 const ICON_ERR: &str = "✗";
 const FRAMES: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 
-/// Width of the action / field column.
 pub const ACTION_WIDTH: usize = 13;
 
 const REVEAL_SPIN_FRAMES: usize = 3;
 const REVEAL_SPIN_MS: u64 = 22;
 const REVEAL_GAP_MS: u64 = 16;
 
-/// Human interactive mode: not JSON and stderr is a terminal.
+/// Returns whether human-oriented terminal output is available.
 pub fn interactive(json: bool) -> bool {
     !json && io::stderr().is_terminal()
 }
@@ -59,7 +48,6 @@ fn colors_allowed() -> bool {
     env::var_os("NO_COLOR").is_none()
 }
 
-/// Immediate success line (no animation).
 pub fn ok(action: &str, detail: impl AsRef<str>) {
     if stdout_color() {
         println!(
@@ -73,7 +61,6 @@ pub fn ok(action: &str, detail: impl AsRef<str>) {
     let _ = io::stdout().flush();
 }
 
-/// Immediate error line.
 pub fn err(action: &str, detail: impl AsRef<str>) {
     if stderr_color() {
         eprintln!(
@@ -87,7 +74,6 @@ pub fn err(action: &str, detail: impl AsRef<str>) {
     let _ = io::stderr().flush();
 }
 
-/// Dim continuation / note (aligned under the detail column).
 pub fn note(message: impl AsRef<str>) {
     if stderr_color() {
         eprintln!("{DIM}·{RESET}  {:<ACTION_WIDTH$}  {}", "", message.as_ref());
@@ -96,7 +82,6 @@ pub fn note(message: impl AsRef<str>) {
     }
 }
 
-/// Dim sub-line under a status row (e.g. long media URL).
 pub fn sub(detail: impl AsRef<str>) {
     if stdout_color() {
         println!("{DIM}   {:<ACTION_WIDTH$}  {}{RESET}", "", detail.as_ref());
@@ -106,7 +91,7 @@ pub fn sub(detail: impl AsRef<str>) {
     let _ = io::stdout().flush();
 }
 
-/// Stream a success row: brief cyan spin, then green ✓ (TTY only).
+/// Animates one success row when stdout is a terminal.
 pub async fn reveal_ok(action: &str, detail: impl AsRef<str>) {
     let detail = detail.as_ref();
     if !stdout_tty() {
@@ -129,14 +114,13 @@ pub async fn reveal_ok(action: &str, detail: impl AsRef<str>) {
     tokio::time::sleep(Duration::from_millis(REVEAL_GAP_MS)).await;
 }
 
-/// Stream several success rows with the spin→✓ reveal.
+/// Animates a sequence of success rows.
 pub async fn reveal_ok_rows(rows: impl IntoIterator<Item = (String, String)>) {
     for (action, detail) in rows {
         reveal_ok(&action, detail).await;
     }
 }
 
-/// Immediate dim sub-line after a reveal (no spin).
 pub async fn reveal_sub(detail: impl AsRef<str>) {
     sub(detail);
     if stdout_tty() {
@@ -144,7 +128,6 @@ pub async fn reveal_sub(detail: impl AsRef<str>) {
     }
 }
 
-/// Aligned platform row for `platforms` / `doctor`.
 pub fn platform_row(id: &str, name: &str, note: &str) {
     let name_aligned = pad_display(name, 14);
     if stdout_color() {
@@ -154,12 +137,12 @@ pub fn platform_row(id: &str, name: &str, note: &str) {
     }
 }
 
-/// Terminal display width according to Unicode's terminal-width tables.
+/// Returns the Unicode terminal width of `text`.
 pub fn display_width(text: &str) -> usize {
     UnicodeWidthStr::width(text)
 }
 
-/// Pad `text` on the right to at least `width` terminal columns.
+/// Right-pads `text` to `width` terminal columns.
 pub fn pad_display(text: &str, width: usize) -> String {
     let w = display_width(text);
     if w >= width {
@@ -169,7 +152,7 @@ pub fn pad_display(text: &str, width: usize) -> String {
     }
 }
 
-/// Right-align `text` within `width` terminal columns.
+/// Left-pads `text` to `width` terminal columns.
 pub fn pad_display_left(text: &str, width: usize) -> String {
     let w = display_width(text);
     if w >= width {
@@ -179,7 +162,7 @@ pub fn pad_display_left(text: &str, width: usize) -> String {
     }
 }
 
-/// Background spinner for long async work (resolve / download).
+/// Background spinner for long-running commands.
 pub struct Spinner {
     stop: Arc<AtomicBool>,
     message: Arc<Mutex<String>>,
@@ -250,13 +233,13 @@ impl Spinner {
         self.active = false;
     }
 
-    /// End long work with a streamed spin→✓ line on stdout.
+    /// Stops the spinner and prints success.
     pub async fn finish_ok(mut self, action: &str, detail: impl AsRef<str>) {
         self.stop_and_clear().await;
         reveal_ok(action, detail).await;
     }
 
-    /// Stop the spinner without printing a status line (caller streams details next).
+    /// Stops the spinner without output.
     pub async fn finish_silent(mut self) {
         self.stop_and_clear().await;
     }

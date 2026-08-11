@@ -92,7 +92,7 @@ pub async fn download(
     let all_sources: Vec<&MediaSource> = post.media_sources().collect();
     let multi_image = post.kind == ContentKind::ImageSet && source.is_none() && !first_only;
 
-    // Interactive pick when TTY and user did not pin --source / first_only.
+    // Prompt only when the source is not pinned.
     let chosen: Vec<(usize, &MediaSource)> =
         if human && source.is_none() && !first_only && all_sources.len() > 1 {
             let table = select::source_option_table(&all_sources);
@@ -146,12 +146,11 @@ pub async fn download(
         return Err(parse_kit::Error::MediaUnavailable);
     }
 
-    // Image sets are independent files. Video sources remain an ordered fallback chain.
+    // Images are independent; video variants are fallbacks.
     if should_download_as_set(post.kind, chosen.len()) {
         return download_many(human, &post, &downloader, &chosen, json).await;
     }
 
-    // Single source (video or one image).
     let sources = chosen;
     let download_spin = if human {
         Some(Spinner::start("Downloading…"))
@@ -427,7 +426,7 @@ fn print_health(kit: &parse_kit::ParseKit) {
     }
 }
 
-/// WeChat QR login → write `YUANBAO_COOKIE` into `.env.local`.
+/// Runs WeChat QR login and saves `YUANBAO_COOKIE`.
 pub async fn wechat_login() -> Result<()> {
     ui::note("requesting Yuanbao WeChat QR login…");
     let session = wechat::start_web_qr_login().await?;
@@ -485,7 +484,7 @@ pub fn wechat_status() -> Result<()> {
     Ok(())
 }
 
-/// Web QR login → write `BILIBILI_COOKIE` into `.env.local`.
+/// Runs Bilibili QR login and saves `BILIBILI_COOKIE`.
 pub async fn bilibili_login() -> Result<()> {
     ui::note("requesting Bilibili QR login…");
     let session = parse_kit::bilibili::start_web_qr_login().await?;

@@ -25,8 +25,7 @@ pub(super) fn validate_media_url<'a>(
     if !url.username().is_empty() || url.password().is_some() {
         return Err(Error::Download("媒体地址不能包含用户凭据".to_owned()));
     }
-    // CDN edges (e.g. Douyin jspcdn) may use non-443 HTTPS ports; host allowlist +
-    // public-IP checks still apply. Reject only empty/invalid ports implicitly via URL.
+    // Reviewed CDN hosts may use non-default HTTPS ports.
     if url.fragment().is_some() {
         return Err(Error::Download("媒体地址不能包含片段标识".to_owned()));
     }
@@ -50,7 +49,7 @@ pub(super) fn host_is_allowed(host: &str, allowed_hosts: &HashSet<String>) -> bo
     host_matches_rules(host, allowed_hosts.iter().map(String::as_str))
 }
 
-/// Resolves `host` for connecting on `port` (must match the request URL port for pinning).
+/// Resolves public addresses for the exact request port.
 pub(super) async fn resolve_public_addresses(host: &str, port: u16) -> Result<Vec<SocketAddr>> {
     let addresses = timeout(DNS_TIMEOUT, tokio::net::lookup_host((host, port)))
         .await

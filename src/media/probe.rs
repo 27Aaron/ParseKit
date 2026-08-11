@@ -38,7 +38,7 @@ pub struct MediaProbe {
     pub duration_seconds: Option<f64>,
 }
 
-/// Probes a local media file with `ffprobe`, restricted to the file protocol.
+/// Probes a local media file with file-only `ffprobe` access.
 pub async fn probe_media(path: impl AsRef<Path>) -> Result<MediaProbe> {
     let path = path.as_ref();
     let metadata = tokio::fs::metadata(path)
@@ -68,7 +68,7 @@ pub async fn probe_media(path: impl AsRef<Path>) -> Result<MediaProbe> {
         .arg("v")
         .arg("-of")
         .arg("json")
-        // Restrict protocols so an untrusted file cannot trigger remote fetches.
+        // Prevent nested network access from untrusted media.
         .arg("-protocol_whitelist")
         .arg("file")
         .arg("-format_whitelist")
@@ -115,8 +115,7 @@ pub async fn probe_media(path: impl AsRef<Path>) -> Result<MediaProbe> {
 
     let (status, json) = match probe_result {
         Err(_) => {
-            // `kill_on_drop` is a last line of defence; explicitly reap the child
-            // here so repeated timeouts cannot accumulate zombie processes.
+            // Reap timed-out children immediately.
             let _ = child.kill().await;
             let _ = child.wait().await;
             return Err(Error::InvalidMedia("ffprobe 执行超时".to_owned()));
@@ -137,8 +136,7 @@ pub async fn probe_media(path: impl AsRef<Path>) -> Result<MediaProbe> {
 
 #[cfg(unix)]
 fn apply_ffprobe_resource_limits(command: &mut Command) {
-    // SAFETY: The pre-exec hook calls only `getrlimit`/`setrlimit` and creates
-    // errors from `errno`. It runs in the child and cannot mutate parent state.
+    // SAFETY: The child hook uses valid pointers for libc limit calls and reports errno.
     unsafe {
         command.pre_exec(|| {
             #[cfg(target_os = "linux")]

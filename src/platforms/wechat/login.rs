@@ -1,10 +1,4 @@
-//! Yuanbao web QR login through WeChat Open Platform.
-//!
-//! The flow mirrors Yuanbao's current web client:
-//! 1. create a `qrconnect` page and extract its short-lived QR UUID;
-//! 2. display the JPEG served by WeChat;
-//! 3. long-poll WeChat until the user confirms;
-//! 4. exchange the returned authorization code with Yuanbao and retain its cookies.
+//! WeChat Open Platform QR login for Yuanbao credentials.
 
 use std::{
     sync::{
@@ -52,10 +46,7 @@ const MAX_POLL_BYTES: usize = 16 * 1024;
 const MAX_LOGIN_BYTES: usize = 256 * 1024;
 const NO_LAST_STATUS: u16 = 0;
 
-/// A short-lived Yuanbao QR login session.
-///
-/// The QR image and its URL are intentionally absent from [`Debug`] because the
-/// embedded UUID is an active login credential until it expires.
+/// Short-lived QR session whose active login URL is redacted from [`Debug`].
 pub struct QrLoginSession {
     client: Client,
     cookies: Arc<Jar>,
@@ -73,7 +64,7 @@ impl QrLoginSession {
         &self.qrcode_image
     }
 
-    /// Short-lived image URL, useful as a fallback when a terminal cannot render the JPEG.
+    /// Short-lived QR image URL.
     pub fn qrcode_url(&self) -> &Url {
         &self.qrcode_url
     }
@@ -88,22 +79,22 @@ impl std::fmt::Debug for QrLoginSession {
     }
 }
 
-/// One poll of the WeChat QR authorization state.
+/// WeChat QR authorization state.
 #[derive(Debug, Clone)]
 pub enum QrPollStatus {
-    /// Waiting for the QR code to be scanned.
+    /// Waiting for a scan.
     WaitingScan,
-    /// Scanned; waiting for confirmation in WeChat.
+    /// Waiting for confirmation after a scan.
     WaitingConfirm,
-    /// The user rejected the confirmation. The same QR can still be scanned again.
+    /// Confirmation was rejected; the QR remains reusable.
     Cancelled,
-    /// The QR code expired and a new session is required.
+    /// The QR code expired.
     Expired,
-    /// Yuanbao accepted the WeChat code and returned a usable cookie.
+    /// Yuanbao returned a usable cookie.
     Success(CookieCredential),
 }
 
-/// Starts a Yuanbao login and downloads the corresponding WeChat QR image.
+/// Starts Yuanbao login and downloads its WeChat QR image.
 pub async fn start_web_qr_login() -> Result<QrLoginSession> {
     let cookies = Arc::new(Jar::default());
     let client = login_client(Arc::clone(&cookies))?;
@@ -165,7 +156,7 @@ pub async fn start_web_qr_login() -> Result<QrLoginSession> {
     })
 }
 
-/// Polls the current Yuanbao QR session once.
+/// Polls a QR session once.
 pub async fn poll_web_qr_login(session: &QrLoginSession) -> Result<QrPollStatus> {
     let mut endpoint =
         Url::parse(WECHAT_QR_POLL_URL).map_err(|_| Error::Config("微信扫码轮询地址无效".into()))?;
@@ -219,7 +210,7 @@ pub async fn poll_web_qr_login(session: &QrLoginSession) -> Result<QrPollStatus>
     }
 }
 
-/// Waits until a QR login succeeds, expires, or reaches the supplied timeout.
+/// Waits for QR success, expiry, or timeout.
 pub async fn wait_web_qr_login(
     session: &QrLoginSession,
     poll_interval: Duration,

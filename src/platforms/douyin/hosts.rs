@@ -7,14 +7,14 @@ const MEDIA_USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleW
 const DOUYIN_ORIGIN: &str = "https://www.douyin.com";
 const DOUYIN_REFERER: &str = "https://www.douyin.com/";
 
-/// Reviewed media hosts; a leading dot matches subdomains only.
+/// Reviewed media hosts; dot-prefixed entries match subdomains.
 pub const REVIEWED_MEDIA_HOSTS: &[&str] = &[
     "aweme.snssdk.com",
     "www.douyin.com",
     "www.iesdouyin.com",
     ".douyinvod.com",
     ".douyincdn.com",
-    // Play endpoints sometimes redirect through jspcdn edges (often :20443).
+    // Play URLs may redirect through jspcdn on port 20443.
     ".jspcdn.cn",
     ".bytevcloudcdn.com",
     ".bytecdn.cn",

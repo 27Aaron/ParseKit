@@ -1,5 +1,4 @@
-# ParseKit task runner — `just` / `just --list`
-# Recipes mirror .github/workflows/ci.yml where noted.
+# Run `just --list` to view project tasks.
 
 set shell := ["bash", "-eu", "-o", "pipefail", "-c"]
 set dotenv-load := true
@@ -9,7 +8,7 @@ export RUSTDOCFLAGS := "-D warnings"
 default:
     @just --list
 
-# --- format / lint -----------------------------------------------------------
+# Formatting and linting
 
 fmt:
     cargo fmt --all
@@ -20,7 +19,7 @@ fmt-check:
 clippy:
     cargo clippy --locked --all-targets --all-features -- -D warnings
 
-# --- test / doc --------------------------------------------------------------
+# Tests and documentation
 
 test:
     cargo test --locked --all-targets --all-features
@@ -31,10 +30,10 @@ test-lib:
 doc:
     cargo doc --locked --no-default-features --no-deps
 
-# Full CI gate (same steps as GitHub Actions)
+# Matches the GitHub Actions gate.
 check: fmt-check clippy test test-lib doc
 
-# Network integration tests (default ignored). WeChat needs YUANBAO_COOKIE.
+# Ignored live tests; WeChat requires YUANBAO_COOKIE.
 test-wechat:
     cargo test --locked --test wechat -- --ignored --nocapture
 
@@ -46,7 +45,7 @@ test-bilibili:
 
 test-live: test-wechat test-douyin test-bilibili
 
-# --- build -------------------------------------------------------------------
+# Builds
 
 build:
     cargo build --locked --all-features
@@ -57,21 +56,7 @@ release:
 clean:
     cargo clean
 
-# --- CLI ---------------------------------------------------------------------
-#
-# Correct:
-#   just resolve 'https://v.douyin.com/…'
-#   just resolve 'https://v.douyin.com/…' --json
-#   just download 'https://weixin.qq.com/sph/…'
-#   just download 'https://weixin.qq.com/sph/…' --json --force
-#   just pk resolve '…' --json
-#   just pk download '…' --force
-#   just platforms
-#
-# Wrong (extra `--` becomes a pk argument):
-#   just pk -- resolve '…'     # don't do this
-#
-# Recipe already inserts cargo's option terminator (`cargo run … -- …`).
+# CLI shortcuts; recipes insert Cargo's `--` separator.
 
 pk *args:
     cargo run --locked --bin pk -- {{ args }}

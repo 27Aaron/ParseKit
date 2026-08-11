@@ -32,8 +32,7 @@ pub fn select_sources(
         return Err(Error::MediaUnavailable);
     }
 
-    // Explicit indices always refer to `pk resolve` order. `--prefer` only
-    // reorders automatic fallbacks.
+    // Explicit indices remain stable; preferences only reorder fallbacks.
     if let Some(index) = source {
         let chosen = sources.get(index).copied().ok_or_else(|| {
             Error::Config(format!(

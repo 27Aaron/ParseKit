@@ -1,17 +1,4 @@
-//! Resolver implementations for supported platforms.
-//!
-//! Every platform follows the same adapter layout:
-//!
-//! - `mod.rs`: facade and [`PlatformSpec`] declaration;
-//! - `resolver.rs`: HTTP orchestration and [`PlatformResolver`] implementation;
-//! - `share.rs`: share-text extraction and URL normalization;
-//! - `parse.rs`: upstream payload mapping into [`ResolvedPost`];
-//! - `hosts.rs`: reviewed download hosts and request identity;
-//! - `tests.rs`: fixture-backed unit tests.
-//!
-//! Platform-only concerns may use extra files (for example WeChat's `api.rs`
-//! and `decrypt.rs`). See `docs/adding-platform.md` for the registration
-//! checklist and a copyable skeleton.
+//! Platform registration, resolver contracts, and implementations.
 
 use std::future::Future;
 
@@ -28,11 +15,7 @@ pub use bilibili::BilibiliResolver;
 pub use douyin::DouyinResolver;
 pub use wechat::WechatResolver;
 
-/// Static metadata and hooks shared by routing and media downloading.
-///
-/// Each platform declares exactly one spec in its `mod.rs`. This keeps URL
-/// matching, CLI capability text, and download policy in one registration
-/// record instead of maintaining separate platform lists.
+/// Static routing and download policy for one platform.
 #[derive(Clone, Copy)]
 pub struct PlatformSpec {
     id: PlatformId,
@@ -91,7 +74,7 @@ impl std::fmt::Debug for PlatformSpec {
     }
 }
 
-/// Platform specs in deterministic share-text matching order.
+/// Registration order used for share-text matching.
 pub const PLATFORM_SPECS: &[&PlatformSpec] = &[&wechat::SPEC, &douyin::SPEC, &bilibili::SPEC];
 
 /// Returns the registered spec for a stable platform id.
@@ -103,11 +86,7 @@ pub fn platform_spec(id: PlatformId) -> &'static PlatformSpec {
     }
 }
 
-/// Contract implemented by every platform resolver.
-///
-/// Implementors provide their spec and URL-resolution operation. The shared
-/// defaults derive platform identity, extraction, and text resolution from
-/// those two pieces.
+/// Common interface for platform-specific URL resolution.
 pub trait PlatformResolver: Sync {
     fn spec(&self) -> &'static PlatformSpec;
 
@@ -150,12 +129,12 @@ impl Platform {
         self.spec().id()
     }
 
-    /// Returns the label shown by the CLI and logs.
+    /// Returns the display label.
     pub fn display_name(&self) -> &'static str {
         self.platform_id().display_name()
     }
 
-    /// Describes credentials or other resolver constraints.
+    /// Describes resolver requirements.
     pub fn capability_note(&self) -> &'static str {
         self.spec().capability_note()
     }

@@ -31,9 +31,7 @@ pub(super) fn parse_any_page_data(html: &str) -> Result<Value> {
 }
 
 fn parse_script_json_assignment(html: &str, marker: &str) -> Result<Value> {
-    // Slice through `</script>` because a regex cannot safely match nested JSON.
-    // Scan every occurrence: marker text can also appear in unrelated scripts or
-    // comments before the real assignment.
+    // Scan assignments and let the JSON parser handle nesting.
     for (marker_at, _) in html.match_indices(marker) {
         let after_marker = html[marker_at + marker.len()..].trim_start();
         let Some(after_eq) = after_marker.strip_prefix('=') else {
@@ -65,9 +63,7 @@ fn parse_embedded_json(raw: &str) -> Option<Value> {
         return None;
     }
 
-    // Legacy Douyin payloads are form/percent encoded. Prefixing a field name
-    // lets `url`'s decoder handle UTF-8 and `+` semantics without another
-    // dependency.
+    // Decode legacy form-encoded payloads with URL semantics.
     let encoded = format!("value={raw}");
     let decoded = url::form_urlencoded::parse(encoded.as_bytes())
         .find(|(key, _)| key == "value")?
@@ -76,7 +72,7 @@ fn parse_embedded_json(raw: &str) -> Option<Value> {
 }
 
 pub(super) fn build_post_from_router(aweme_id: &str, router: &Value) -> Result<ResolvedPost> {
-    // JSON Pointer escapes the slash in `video_(id)/page` as `~1`.
+    // `~1` escapes the slash in JSON Pointer.
     let page = router
         .pointer("/loaderData/video_(id)~1page")
         .ok_or(Error::UpstreamChanged)?;

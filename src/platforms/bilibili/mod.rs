@@ -19,7 +19,7 @@ pub use login::{
 pub use resolver::BilibiliResolver;
 pub use share::extract_share_url;
 
-/// Complete static registration for the Bilibili adapter.
+/// Static Bilibili adapter registration.
 pub const SPEC: PlatformSpec = PlatformSpec::new(
     PlatformId::Bilibili,
     "public video page (login unlocks higher quality)",

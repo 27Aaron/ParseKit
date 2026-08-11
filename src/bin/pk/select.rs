@@ -1,12 +1,4 @@
-//! Interactive source picker with radio / checkbox circles (○ ●).
-//!
-//! Keys:
-//! - `↑`/`k`  move up
-//! - `↓`/`j`  move down
-//! - `Space`  toggle (multi only)
-//! - `1`–`9`  jump to index
-//! - `Enter`  confirm
-//! - `q`/`Esc` cancel
+//! Interactive single- and multi-source picker.
 
 use std::io::{self, IsTerminal, Read, Write};
 
@@ -25,18 +17,16 @@ const ICON_ON: &str = "●";
 const ICON_OFF: &str = "○";
 const COL_SEP: &str = "  ·  ";
 
-/// Column-aligned source list with a Chinese header explaining each field.
+/// Column-aligned source options.
 #[derive(Debug, Clone)]
 pub struct SourcePickerTable {
-    /// Header line aligned with [`Self::rows`] (画质 / 分辨率 / 码率 / …).
+    /// Header aligned with [`Self::rows`].
     pub header: String,
-    /// One label per source, column-aligned with [`Self::header`].
+    /// One aligned row per source.
     pub rows: Vec<String>,
 }
 
-/// Single-choice radio list. Returns `None` if cancelled.
-///
-/// `column_header`, when set, is drawn above the options (aligned with labels).
+/// Picks one option or returns `None` on cancellation.
 pub fn pick_one(
     options: &[String],
     default: usize,
@@ -56,7 +46,7 @@ pub fn pick_one(
     }
 }
 
-/// Multi-select. Space toggles, Enter confirms. Returns `None` if cancelled.
+/// Picks multiple options or returns `None` on cancellation.
 pub fn pick_many(
     options: &[String],
     preselect_all: bool,
@@ -92,7 +82,7 @@ pub fn pick_many(
     }
 }
 
-/// Build aligned table rows plus a header (画质 / 分辨率 / 码率 / 大小 / 类型).
+/// Builds the aligned source table.
 pub fn source_option_table(sources: &[&MediaSource]) -> SourcePickerTable {
     let rows: Vec<SourceCols> = sources.iter().map(|source| source_cols(source)).collect();
     let (header, rows) = align_source_table(&rows);
@@ -132,7 +122,7 @@ fn source_cols(source: &MediaSource) -> SourceCols {
     }
 }
 
-/// Chinese column titles; widths are expanded to fit both headers and data.
+/// Aligns headers and data to shared column widths.
 fn header_cols(show_dims: bool, show_rate: bool, show_size: bool, show_kind: bool) -> SourceCols {
     SourceCols {
         label: "画质".into(),
@@ -237,7 +227,7 @@ fn align_source_table(rows: &[SourceCols]) -> (String, Vec<String>) {
         parts.join(COL_SEP)
     };
 
-    // Header: left-align titles; data: right-align numeric rate/size.
+    // Headers are left-aligned; numeric values are right-aligned.
     let header_line = format_row(&header, false);
     let body = rows.iter().map(|row| format_row(row, true)).collect();
     (header_line, body)
@@ -326,7 +316,6 @@ fn run_picker(options: &[String], column_header: Option<&str>, mut mode: Mode) -
                             .map(|(i, _)| i)
                             .collect();
                         if indices.is_empty() {
-                            // Keep UI; require at least one selection.
                             redraw(&mode, options, column_header, lines)?;
                             continue;
                         }
@@ -367,10 +356,8 @@ fn draw(mode: &Mode, options: &[String], column_header: Option<&str>) -> Result<
         writeln!(out, "{hint}").map_err(io_err)?;
     }
 
-    // 1-based display numbers: [ 1] … [13]. Internal cursor stays 0-based.
     let index_width = options.len().to_string().len().max(1);
     if let Some(header) = column_header {
-        // Blank gutter matching " {ptr} {circle}  [idx]  " — never print a fake index.
         let gutter = format!(
             " {} {}  {}  ",
             " ",
@@ -473,8 +460,7 @@ impl RawMode {
         }
         let original = unsafe { original.assume_init() };
         let mut raw = original;
-        // Disable signal generation so Ctrl-C is handled as input and Drop can
-        // restore the terminal before the picker exits.
+        // Read Ctrl-C as input so Drop can restore terminal state.
         raw.c_lflag &= !(libc::ICANON | libc::ECHO | libc::ISIG);
         raw.c_cc[libc::VMIN] = 1;
         raw.c_cc[libc::VTIME] = 0;

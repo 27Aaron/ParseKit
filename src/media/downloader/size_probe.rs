@@ -26,9 +26,7 @@ const MAX_REDIRECTS: usize = 5;
 const DEFAULT_UA: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 \
      (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36";
 
-/// Fills missing [`crate::MediaSource::size_hint`] via lightweight HTTP probes.
-///
-/// Soft-fail: probe errors leave the field unset and do not abort resolve.
+/// Best-effort population of missing [`crate::MediaSource::size_hint`] values.
 pub async fn enrich_missing_size_hints(post: &mut ResolvedPost) {
     let identity = DownloadRequestIdentity::for_platform(post.platform);
     let hosts = platforms::platform_spec(post.platform).reviewed_media_hosts();
@@ -36,8 +34,7 @@ pub async fn enrich_missing_size_hints(post: &mut ResolvedPost) {
         return;
     };
 
-    // A post may expose the same CDN URL in more than one fallback slot. Probe
-    // each unique URL once, while preserving source order for predictable load.
+    // Probe each unique CDN URL once.
     let mut missing = Vec::<(Url, Vec<usize>)>::new();
     let mut positions = HashMap::<Url, usize>::new();
     for (index, source) in post
@@ -73,8 +70,7 @@ pub async fn enrich_missing_size_hints(post: &mut ResolvedPost) {
         });
     }
 
-    // Size hints are optional: cap the whole enrichment phase, not every URL
-    // serially, so a large image set cannot delay resolution by N × timeout.
+    // Bound the entire optional enrichment phase.
     let deadline = tokio::time::Instant::now() + PROBE_TIMEOUT;
     loop {
         match timeout_at(deadline, probes.join_next()).await {
@@ -115,7 +111,6 @@ async fn probe_content_length(
             .build()
             .map_err(|_| crate::Error::Config("无法初始化体积探测 HTTP 客户端".into()))?;
 
-        // HEAD first (no body).
         let head = request_raw(&client, Method::HEAD, &current, identity, false).await?;
         if head.status().is_redirection() {
             if let Some(next) = redirect_location(&head, &current) {
@@ -128,7 +123,6 @@ async fn probe_content_length(
             return Ok(Some(len));
         }
 
-        // Many CDNs only answer with Content-Range on a ranged GET.
         let ranged = request_raw(&client, Method::GET, &current, identity, true).await?;
         if ranged.status().is_redirection() {
             if let Some(next) = redirect_location(&ranged, &current) {
@@ -153,8 +147,7 @@ fn size_from_response(response: &reqwest::Response) -> Option<u64> {
     if let Some(total) = content_range_total(response.headers()).filter(|total| *total > 0) {
         return Some(total);
     }
-    // A 206 Content-Length describes only the returned range, never the whole
-    // representation. Without a valid Content-Range total it is not a size hint.
+    // A 206 Content-Length covers only the returned range.
     if status == StatusCode::PARTIAL_CONTENT {
         return None;
     }
@@ -193,7 +186,7 @@ fn content_length_header(headers: &reqwest::header::HeaderMap) -> Option<u64> {
     headers.get(CONTENT_LENGTH)?.to_str().ok()?.parse().ok()
 }
 
-/// Parses `Content-Range: bytes 0-0/123456` → `123456`.
+/// Returns the total length from `Content-Range`.
 pub(super) fn content_range_total(headers: &reqwest::header::HeaderMap) -> Option<u64> {
     parse_content_range(headers)?.total
 }

@@ -15,7 +15,7 @@ pub use hosts::{REVIEWED_DOUYIN_MEDIA_HOSTS, REVIEWED_MEDIA_HOSTS, download_iden
 pub use resolver::DouyinResolver;
 pub use share::extract_share_url;
 
-/// Complete static registration for the Douyin adapter.
+/// Static Douyin adapter registration.
 pub const SPEC: PlatformSpec = PlatformSpec::new(
     PlatformId::Douyin,
     "public share page",

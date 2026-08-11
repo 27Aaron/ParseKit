@@ -1,5 +1,3 @@
-//! Tests for the WeChat platform adapter.
-
 use super::api::{ParseData, cookie_value};
 use super::parse::{build_post, has_matching_media_identity, merge_source_metadata};
 use super::share::{

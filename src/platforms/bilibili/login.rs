@@ -1,9 +1,4 @@
-//! Bilibili web QR login (passport API), aligned with BBDown's WEB flow.
-//!
-//! Success may deliver `SESSDATA` either:
-//! - in the poll JSON success URL query (legacy BBDown path), or
-//! - via `Set-Cookie` on the poll response / after GET of the success URL
-//!   (current passport flow returns `ticket` + `gourl` and sets cookies on fetch).
+//! Bilibili Passport QR login and session-cookie exchange.
 
 use std::{sync::OnceLock, time::Duration};
 
@@ -29,7 +24,7 @@ const POLL_URL: &str = "https://passport.bilibili.com/x/passport-login/web/qrcod
 const MAX_JSON_BYTES: usize = 64 * 1024;
 const MAX_COOKIE_EXCHANGE_REDIRECTS: usize = 8;
 
-/// Cookie names worth keeping from passport / bilibili domain responses.
+/// Session cookies retained from Passport responses.
 const KEEP_COOKIE_NAMES: &[&str] = &[
     "SESSDATA",
     "bili_jct",
@@ -40,29 +35,29 @@ const KEEP_COOKIE_NAMES: &[&str] = &[
     "bili_ticket_expires",
 ];
 
-/// Started web QR session: open [`Self::url`] in the Bilibili app / browser.
+/// Active Bilibili QR session.
 #[derive(Debug, Clone)]
 pub struct QrLoginSession {
-    /// Full URL encoded in the QR code.
+    /// URL encoded in the QR code.
     pub url: String,
     /// Key used to poll login status.
     pub qrcode_key: String,
 }
 
-/// One poll of the QR login status endpoint.
+/// QR login state.
 #[derive(Debug, Clone)]
 pub enum QrPollStatus {
-    /// Waiting for the user to scan the code.
+    /// Waiting for a scan.
     WaitingScan,
-    /// Scanned; waiting for confirmation in the app.
+    /// Waiting for confirmation after a scan.
     WaitingConfirm,
-    /// QR expired; start a new session.
+    /// The QR code expired.
     Expired,
-    /// Login succeeded; cookie header ready for API requests.
+    /// Login returned a usable cookie.
     Success(CookieCredential),
 }
 
-/// Generates a web QR login session.
+/// Starts a web QR login session.
 pub async fn start_web_qr_login() -> Result<QrLoginSession> {
     let client = passport_client()?;
     let response = client
@@ -115,7 +110,7 @@ pub async fn start_web_qr_login() -> Result<QrLoginSession> {
     Ok(QrLoginSession { url, qrcode_key })
 }
 
-/// Polls once for QR login completion.
+/// Polls a QR session once.
 pub async fn poll_web_qr_login(qrcode_key: &str) -> Result<QrPollStatus> {
     let qrcode_key = qrcode_key.trim();
     if !valid_qrcode_key(qrcode_key) {
@@ -146,7 +141,7 @@ pub async fn poll_web_qr_login(qrcode_key: &str) -> Result<QrPollStatus> {
         )));
     }
 
-    // Prefer Set-Cookie from the poll response (some clients get SESSDATA here).
+    // Poll responses may set SESSDATA directly.
     let mut pairs = set_cookie_pairs(response.headers());
 
     let bytes = read_body_limited(response, MAX_JSON_BYTES, |error| {
@@ -172,10 +167,10 @@ pub async fn poll_web_qr_login(qrcode_key: &str) -> Result<QrPollStatus> {
                 return Err(Error::UpstreamChanged);
             }
 
-            // Legacy BBDown: SESSDATA embedded in the success URL query string.
+            // Legacy flows embed SESSDATA in the success URL.
             merge_query_session_pairs(success_url, &mut pairs);
 
-            // Current flow: success URL has ticket/gourl; GET it to receive Set-Cookie.
+            // Current flows exchange the ticket URL for Set-Cookie.
             if !has_sessdata(&pairs) {
                 exchange_success_url_for_cookies(&client, success_url, &mut pairs).await?;
             }
@@ -187,7 +182,7 @@ pub async fn poll_web_qr_login(qrcode_key: &str) -> Result<QrPollStatus> {
     }
 }
 
-/// Blocks until QR login succeeds, expires, or the optional timeout elapses.
+/// Waits for QR success, expiry, or timeout.
 pub async fn wait_web_qr_login(
     qrcode_key: &str,
     poll_interval: Duration,
@@ -222,7 +217,7 @@ pub async fn wait_web_qr_login(
     }
 }
 
-/// GET the passport success URL (and redirects) and merge session Set-Cookie values.
+/// Follows the success URL and collects session cookies.
 async fn exchange_success_url_for_cookies(
     client: &Client,
     success_url: &str,
@@ -251,7 +246,6 @@ async fn exchange_success_url_for_cookies(
         }
 
         if !response.status().is_redirection() {
-            // Final page may still have set cookies even without SESSDATA if upstream changed.
             return Ok(());
         }
         let location = response
@@ -271,7 +265,7 @@ fn merge_query_session_pairs(success_url: &str, pairs: &mut Vec<(String, String)
     let Some(query) = url.query() else {
         return;
     };
-    // Only pull known session keys from the query — not ticket/gourl.
+    // Ignore non-session ticket parameters.
     for (name, value) in url::form_urlencoded::parse(query.as_bytes()) {
         if KEEP_COOKIE_NAMES
             .iter()
@@ -280,7 +274,7 @@ fn merge_query_session_pairs(success_url: &str, pairs: &mut Vec<(String, String)
             upsert_pair(pairs, name.into_owned(), value.into_owned());
         }
     }
-    // Also accept BBDown-style full cookie dump if the query already looks like one.
+    // Accept legacy query dumps formatted as cookies.
     let as_header = query_string_to_cookie_header(query);
     if cookie_value(&as_header, "SESSDATA").is_some() {
         for part in as_header.split(';') {
@@ -302,7 +296,6 @@ fn set_cookie_pairs(headers: &HeaderMap) -> Vec<(String, String)> {
         let Ok(raw) = value.to_str() else {
             continue;
         };
-        // `name=value; Path=/; Domain=...`
         let first = raw.split(';').next().unwrap_or("").trim();
         let Some((name, val)) = first.split_once('=') else {
             continue;
@@ -311,7 +304,6 @@ fn set_cookie_pairs(headers: &HeaderMap) -> Vec<(String, String)> {
         if name.is_empty() {
             continue;
         }
-        // Keep known session cookies; also keep SESSDATA even if list drifts.
         if KEEP_COOKIE_NAMES
             .iter()
             .any(|keep| keep.eq_ignore_ascii_case(name))
@@ -386,8 +378,7 @@ fn valid_qrcode_key(key: &str) -> bool {
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
 }
 
-/// Passport controls this URL, but validate every hop before requesting it so
-/// an upstream payload change cannot turn the cookie exchange into an SSRF.
+/// Restricts Passport-controlled redirects to Bilibili HTTPS origins.
 fn is_allowed_bilibili_url(url: &Url) -> bool {
     if url.scheme() != "https"
         || !url.username().is_empty()
@@ -414,7 +405,7 @@ fn passport_client() -> Result<Client> {
     let client = Client::builder()
         .connect_timeout(Duration::from_secs(10))
         .timeout(Duration::from_secs(20))
-        // Follow redirects ourselves so every hop's Set-Cookie is visible.
+        // Follow manually to collect every Set-Cookie response.
         .redirect(Policy::none())
         .no_proxy()
         .build()
@@ -436,7 +427,6 @@ mod tests {
         let cookie = credential_from_pairs(&pairs).unwrap();
         assert!(cookie.as_str().contains("SESSDATA=tok%2Cen"));
         assert!(cookie.as_str().contains("bili_jct=jct"));
-        // gourl / ticket must not be stored as cookies
         assert!(!cookie.as_str().contains("gourl="));
     }
 
@@ -460,10 +450,7 @@ mod tests {
             SET_COOKIE,
             HeaderValue::from_static("bili_jct=csrf; Path=/; Domain=.bilibili.com"),
         );
-        headers.append(
-            SET_COOKIE,
-            HeaderValue::from_static("noise=1; Path=/"), // ignored
-        );
+        headers.append(SET_COOKIE, HeaderValue::from_static("noise=1; Path=/"));
         let pairs = set_cookie_pairs(&headers);
         assert!(has_sessdata(&pairs));
         let cookie = credential_from_pairs(&pairs).unwrap();

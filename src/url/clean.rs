@@ -2,28 +2,28 @@
 
 use url::Url;
 
-/// Defines the query parameters preserved during URL cleanup.
+/// Query keys preserved during URL cleanup.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct CleanPolicy {
-    /// Query parameter names to preserve, matched case-insensitively.
+    /// Case-insensitive keys to preserve.
     pub reserved: &'static [&'static str],
 }
 
 impl CleanPolicy {
     pub const EMPTY: Self = Self { reserved: &[] };
 
-    /// Preserves parameters required by signed media URLs.
+    /// Policy for signed media URLs.
     pub const MEDIA_SIGNED: Self = Self {
         reserved: &["token", "encfilekey", "decodekey"],
     };
 
-    /// Preserves structural parameters used by share pages.
+    /// Policy for share-page URLs.
     pub const SHARE_PAGE: Self = Self {
         reserved: &["p", "t", "spm_id_from"],
     };
 }
 
-/// Removes known tracking parameters and fragments while preserving reserved keys.
+/// Removes tracking parameters and fragments while preserving reserved keys.
 pub fn clean_tracking_params(url: &Url, policy: CleanPolicy) -> Url {
     let mut cleaned = url.clone();
     cleaned.set_fragment(None);

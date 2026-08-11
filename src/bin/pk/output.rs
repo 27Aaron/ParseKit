@@ -4,7 +4,7 @@ use parse_kit::{Error, MediaSource, ResolvedPost, Result};
 
 use crate::{sources::source_kind_label, ui};
 
-/// Instant summary (non-TTY / scripts). Every field is a ✓ row.
+/// Prints a non-interactive post summary.
 pub fn print_post_summary(post: &ResolvedPost) {
     for (action, detail) in summary_rows(post) {
         ui::ok(&action, detail);
@@ -20,7 +20,7 @@ pub fn print_post_summary(post: &ResolvedPost) {
     }
 }
 
-/// Streamed summary with spin→✓ reveal (interactive TTY).
+/// Animates an interactive post summary.
 pub async fn stream_post_summary(post: &ResolvedPost) {
     stream_post_header(post).await;
     for (index, source) in post.media_sources().enumerate() {
@@ -32,7 +32,7 @@ pub async fn stream_post_summary(post: &ResolvedPost) {
     }
 }
 
-/// Compact header for download flow (picker shows source rows next).
+/// Prints post metadata before source selection.
 pub async fn stream_post_header(post: &ResolvedPost) {
     ui::reveal_ok_rows(summary_rows(post)).await;
     let total = post.media_sources().count();

@@ -1,5 +1,3 @@
-//! Tests for the Douyin resolver.
-
 use super::{
     extract_share_url,
     parse::{

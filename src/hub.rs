@@ -9,13 +9,13 @@ use crate::{
     platforms::{self, BilibiliResolver, DouyinResolver, Platform, WechatResolver},
 };
 
-/// Resolves posts through registered platforms in order.
+/// Routes links through registered platform resolvers.
 #[derive(Debug, Clone)]
 pub struct ParseKit {
     platforms: Vec<Platform>,
 }
 
-/// Configures the platform resolver order used by [`ParseKit`].
+/// Configures resolver registration and order.
 #[derive(Debug, Default)]
 pub struct ParseKitBuilder {
     platforms: Vec<Platform>,
@@ -38,14 +38,14 @@ impl ParseKitBuilder {
         Ok(self)
     }
 
-    /// Registers Bilibili without a session cookie (public quality ladder).
+    /// Registers anonymous Bilibili resolution.
     pub fn bilibili(mut self) -> Result<Self> {
         self.platforms
             .push(Platform::Bilibili(BilibiliResolver::new()?));
         Ok(self)
     }
 
-    /// Registers Bilibili with a Cookie header (e.g. `BILIBILI_COOKIE` / SESSDATA).
+    /// Registers Bilibili with a Cookie header.
     pub fn bilibili_with_cookie(mut self, cookie: impl Into<String>) -> Result<Self> {
         self.platforms
             .push(Platform::Bilibili(BilibiliResolver::with_cookie(cookie)?));
@@ -68,9 +68,7 @@ impl ParseKitBuilder {
 }
 
 impl ParseKit {
-    /// Builds the default WeChat, Douyin, and Bilibili resolver set.
-    ///
-    /// Use [`ParseKit::builder`] to select a custom set or order.
+    /// Registers WeChat, Douyin, and Bilibili in default order.
     pub fn new(wechat_yuanbao_cookie: impl Into<String>) -> Result<Self> {
         Self::builder()
             .wechat(wechat_yuanbao_cookie)?
@@ -96,7 +94,6 @@ impl ParseKit {
                 .resolve_url(&share_url)
                 .instrument(tracing::info_span!("platform.resolve", platform = id))
                 .await?;
-            // Soft-fill size_hint when upstream omitted it (Douyin/WeChat often do).
             crate::media::enrich_missing_size_hints(&mut post)
                 .instrument(tracing::info_span!("media.probe_size", platform = id))
                 .await;
@@ -124,8 +121,6 @@ impl ParseKit {
         .await
     }
 
-    /// Finds the first matching resolver and retains its extracted URL so text
-    /// resolution does not repeat the same regex and URL parsing work.
     fn matching_platform(&self, input: &str) -> Result<(&Platform, Url)> {
         for platform in &self.platforms {
             match platform.extract_share_url(input) {
@@ -153,7 +148,7 @@ impl ParseKit {
         &self.platforms
     }
 
-    /// Creates a downloader for the post's platform hosts and file stem.
+    /// Creates a downloader scoped to the post's platform and file stem.
     pub fn media_downloader_for(
         &self,
         post: &ResolvedPost,

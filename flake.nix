@@ -25,8 +25,7 @@
         default = pkgs.mkShell {
           packages =
             (with pkgs; [
-              # Rust toolchain and editor support from the pinned nixpkgs revision.
-              # Keep this toolchain aligned with Cargo.toml and CI.
+              # Rust toolchain; keep aligned with Cargo.toml and CI.
               rustc
               cargo
               clippy

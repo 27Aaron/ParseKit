@@ -2,10 +2,7 @@
 
 use url::Url;
 
-/// Matches an exact hostname or a dot-prefixed subdomain rule.
-///
-/// A rule such as `.cdn.example` matches `video.cdn.example`, but not the apex
-/// `cdn.example` or a lookalike such as `evilcdn.example`.
+/// Matches exact hosts or dot-prefixed subdomain rules with label boundaries.
 pub(crate) fn host_matches_rules<I, S>(host: &str, rules: I) -> bool
 where
     I: IntoIterator<Item = S>,
@@ -24,10 +21,7 @@ where
     })
 }
 
-/// Returns `true` when a URL has a safe HTTPS authority and a reviewed host.
-///
-/// Non-443 HTTPS ports are allowed (CDN edges sometimes use them). DNS and IP
-/// checks run separately immediately before download.
+/// Checks the HTTPS authority and reviewed host; DNS checks run at download time.
 pub(crate) fn is_reviewed_https_url(url: &Url, rules: &[&str]) -> bool {
     url.scheme() == "https"
         && url.username().is_empty()
@@ -70,7 +64,6 @@ mod tests {
 
         let url = Url::parse("https://media.example:443/video.mp4").expect("test URL");
         assert!(is_reviewed_https_url(&url, &rules));
-        // CDN-style non-default HTTPS port on a reviewed host is accepted.
         let url = Url::parse("https://media.example:20443/video.mp4").expect("test URL");
         assert!(is_reviewed_https_url(&url, &rules));
     }

@@ -115,15 +115,14 @@ fn collect_durl_sources(play: &Value) -> Vec<MediaSource> {
     let Some(durl) = play.get("durl").and_then(Value::as_array) else {
         return Vec::new();
     };
-    // Multiple `durl` entries are sequential segments, not fallbacks. Reject
-    // them until the model can represent a multi-part video.
+    // Multiple durl entries are sequential segments, not fallbacks.
     if durl.len() != 1 {
         return Vec::new();
     }
 
     let item = &durl[0];
     let size_hint = item.get("size").and_then(Value::as_u64);
-    // Progressive `durl` only exposes `quality` + optional `video_codecid` — never invent codecs.
+    // Do not infer codecs absent from progressive metadata.
     let tier = play
         .get("quality")
         .and_then(Value::as_u64)
@@ -164,7 +163,7 @@ fn collect_durl_sources(play: &Value) -> Vec<MediaSource> {
     sources
 }
 
-/// Bilibili `video_codecid` → short display tag (only known ids).
+/// Maps known `video_codecid` values to display tags.
 fn bilibili_codecid_tag(codecid: u64) -> Option<&'static str> {
     match codecid {
         7 => Some("AVC"),
@@ -216,7 +215,7 @@ fn collect_dash_video_sources(play: &Value) -> Vec<MediaSource> {
             .and_then(Value::as_u64)
             .and_then(|value| u32::try_from(value).ok());
         let size_hint = item.get("size").and_then(Value::as_u64);
-        // Prefer Bilibili stream `id` (qn) labels — more accurate than short-edge tiers.
+        // Stream qn labels are more precise than resolution tiers.
         let qn_label = item
             .get("id")
             .and_then(Value::as_u64)
@@ -238,8 +237,7 @@ fn collect_dash_video_sources(play: &Value) -> Vec<MediaSource> {
             (None, Some(c)) => Some(c.to_owned()),
             (None, None) => None,
         };
-        // One primary URL per stream representation. CDN backups would explode the
-        // interactive picker without adding distinct qualities.
+        // Keep one CDN URL per stream representation.
         for key in ["base_url", "baseUrl", "url"] {
             if let Some(raw) = item.get(key).and_then(Value::as_str)
                 && let Some(mut source) =

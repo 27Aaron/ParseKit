@@ -1,6 +1,4 @@
-//! Parse and download media from supported social platforms.
-//!
-//! Use [`ParseKit`] as the facade or access individual [`platforms`] resolvers.
+//! Resolve supported social-media links and download their media.
 
 pub mod auth;
 pub mod error;

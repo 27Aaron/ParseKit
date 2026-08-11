@@ -7,14 +7,12 @@ use std::{
 
 use parse_kit::{Error, ParseKit, ParseKitBuilder, Result};
 
-/// Env key for Bilibili web cookie (`SESSDATA=...; bili_jct=...`).
 const BILIBILI_COOKIE_ENV: &str = "BILIBILI_COOKIE";
-/// Env key for WeChat Channels via Yuanbao (`hy_user` / `hy_token` / …).
 const YUANBAO_COOKIE_ENV: &str = "YUANBAO_COOKIE";
 const ENV_LOCAL_FILE: &str = ".env.local";
 const ENV_FILE: &str = ".env";
 
-/// Preferred path for CLI-written credentials (does not clobber hand-edited `.env`).
+/// Returns the CLI-managed credential file.
 pub fn env_local_path() -> &'static Path {
     Path::new(ENV_LOCAL_FILE)
 }
@@ -40,8 +38,7 @@ fn load_dotenv_file(path: &Path) -> Result<()> {
 
 fn dotenv_error_detail(error: dotenvy::Error) -> String {
     match error {
-        // dotenvy's Display includes the complete source line, which may
-        // contain a cookie. Report only the offset for parse failures.
+        // Avoid exposing the source line, which may contain credentials.
         dotenvy::Error::LineParse(_, offset) => format!("格式错误（位置 {offset}）"),
         dotenvy::Error::Io(error) => error.to_string(),
         dotenvy::Error::EnvVar(error) => error.to_string(),
@@ -81,7 +78,6 @@ pub fn default_output_dir() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("./downloads"))
 }
 
-/// Persist a cookie env key into `.env.local`.
 fn save_cookie_env(key: &str, cookie: &str) -> Result<()> {
     let path = env_local_path();
     parse_kit::auth::upsert_dotenv_var(path, key, cookie)
@@ -89,7 +85,6 @@ fn save_cookie_env(key: &str, cookie: &str) -> Result<()> {
     Ok(())
 }
 
-/// Remove a cookie env key from `.env.local`.
 fn clear_cookie_env(key: &str) -> Result<bool> {
     let path = env_local_path();
     parse_kit::auth::remove_dotenv_var(path, key)

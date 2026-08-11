@@ -1,9 +1,4 @@
-//! Shared credential vocabulary for platforms that need login.
-//!
-//! Resolvers still own how credentials are applied to HTTP requests.
-//! This module only provides:
-//! - a common [`CredentialStatus`] for CLI `doctor` / capability checks;
-//! - cookie string helpers used by Bilibili today (WeChat can migrate later).
+//! Validated cookie credentials and private dotenv persistence.
 
 use std::{
     fs::OpenOptions,
@@ -15,29 +10,25 @@ use std::{
 #[cfg(unix)]
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 
-/// Local assessment of configured credentials (no network verification).
+/// Credential state inferred without network access.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CredentialStatus {
-    /// No credential is configured for this platform.
+    /// No credential is configured.
     Absent,
-    /// A value is present but missing expected session markers.
+    /// The value lacks required session markers.
     Incomplete,
-    /// Local shape looks usable; upstream may still reject it.
+    /// The value has the expected local shape.
     Present,
 }
 
-/// Opaque cookie header value (`name=value; name2=value2`).
-///
-/// Debug redacts the raw cookie so it never appears in logs by default.
+/// Validated Cookie header value with redacted [`Debug`](std::fmt::Debug).
 #[derive(Clone)]
 pub struct CookieCredential {
     raw: Arc<str>,
 }
 
 impl CookieCredential {
-    /// Builds a credential from a cookie header string.
-    ///
-    /// Empty, whitespace-only, or invalid HTTP header input yields [`None`].
+    /// Returns `None` for empty or invalid HTTP header values.
     pub fn new(cookie: impl Into<String>) -> Option<Self> {
         let cookie = cookie.into();
         let trimmed = cookie.trim();
@@ -51,7 +42,7 @@ impl CookieCredential {
         })
     }
 
-    /// Cookie header value for `Cookie:` requests.
+    /// Returns the raw Cookie header value.
     pub fn as_str(&self) -> &str {
         &self.raw
     }
@@ -65,7 +56,7 @@ impl std::fmt::Debug for CookieCredential {
     }
 }
 
-/// Returns the value of a single cookie name from a Cookie header string.
+/// Returns one value from a Cookie header.
 pub fn cookie_value(cookie: &str, name: &str) -> Option<String> {
     cookie.split(';').find_map(|part| {
         let (key, value) = part.trim().split_once('=')?;
@@ -73,9 +64,7 @@ pub fn cookie_value(cookie: &str, name: &str) -> Option<String> {
     })
 }
 
-/// Converts a success-URL query string (`a=1&b=2`) into a Cookie header body.
-///
-/// Matches BBDown: replace `&` with `;` and escape commas in values.
+/// Converts URL query pairs to a Cookie header and escapes commas as `%2C`.
 pub fn query_string_to_cookie_header(query: &str) -> String {
     let query = query.strip_prefix('?').unwrap_or(query);
     let mut header = String::with_capacity(query.len());
@@ -94,10 +83,7 @@ pub fn query_string_to_cookie_header(query: &str) -> String {
     header
 }
 
-/// Upserts `KEY=value` in a dotenv-style file (creates parent dirs / file as needed).
-///
-/// Used by CLI login to persist `BILIBILI_COOKIE` into `.env.local` without
-/// rewriting an existing hand-edited `.env`.
+/// Upserts a quoted dotenv assignment, creating its parent and file as needed.
 pub fn upsert_dotenv_var(path: &Path, key: &str, value: &str) -> io::Result<()> {
     validate_dotenv_input(key, value)?;
     if let Some(parent) = path.parent()
@@ -119,7 +105,7 @@ pub fn upsert_dotenv_var(path: &Path, key: &str, value: &str) -> io::Result<()> 
     let mut out = String::new();
     for existing_line in existing.lines() {
         if line_assigns_key(existing_line, key) {
-            // Collapse duplicate assignments so a later stale value cannot win.
+            // Keep only the first active assignment.
             if !replaced {
                 out.push_str(&line);
                 out.push('\n');
@@ -143,7 +129,7 @@ pub fn upsert_dotenv_var(path: &Path, key: &str, value: &str) -> io::Result<()> 
     write_private_file(path, out.as_bytes())
 }
 
-/// Removes a key from a dotenv-style file if present.
+/// Removes every active assignment for `key` from a dotenv file.
 pub fn remove_dotenv_var(path: &Path, key: &str) -> io::Result<bool> {
     validate_dotenv_key(key)?;
     if !dotenv_path_exists_and_safe(path)? {
@@ -167,7 +153,7 @@ pub fn remove_dotenv_var(path: &Path, key: &str) -> io::Result<bool> {
 }
 
 fn escape_dotenv_value(value: &str) -> String {
-    // Double-quoted form so `;`, spaces, and `=` inside cookies are preserved.
+    // Quoting preserves cookie separators and whitespace.
     let mut escaped = String::with_capacity(value.len() + 2);
     escaped.push('"');
     for character in value.chars() {
