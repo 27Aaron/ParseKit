@@ -12,10 +12,7 @@ pub fn print_post_summary(post: &ResolvedPost) {
     let total = post.media_sources().count();
     ui::ok("sources", format!("{total} 路（[0] 默认最高）"));
     for (index, source) in post.media_sources().enumerate() {
-        ui::ok(
-            &format!("source[{index}]"),
-            source.quality_summary(),
-        );
+        ui::ok(&format!("source[{index}]"), source.quality_summary());
         ui::sub(source.url.as_str());
     }
     if total > 1 {

@@ -46,11 +46,7 @@ pub fn pick_one(
     if options.len() == 1 || !stdin_stdout_tty() {
         return Ok(Some(default));
     }
-    match run_picker(
-        options,
-        column_header,
-        Mode::Single { cursor: default },
-    )? {
+    match run_picker(options, column_header, Mode::Single { cursor: default })? {
         Outcome::Cancel => Ok(None),
         Outcome::Single(i) => Ok(Some(i)),
         Outcome::Multi(v) => Ok(v.into_iter().next()),
@@ -276,11 +272,7 @@ enum Outcome {
     Multi(Vec<usize>),
 }
 
-fn run_picker(
-    options: &[String],
-    column_header: Option<&str>,
-    mut mode: Mode,
-) -> Result<Outcome> {
+fn run_picker(options: &[String], column_header: Option<&str>, mut mode: Mode) -> Result<Outcome> {
     let _raw = RawMode::enter().map_err(|e| Error::Config(format!("无法进入终端原始模式: {e}")))?;
     let lines = options.len() + 2 + usize::from(column_header.is_some());
     draw(&mode, options, column_header)?;
@@ -549,10 +541,7 @@ mod tests {
         assert!(header.contains("码率"));
         assert!(header.contains("大小"));
         assert!(header.contains("类型"));
-        let widths: Vec<_> = labels
-            .iter()
-            .map(|l| crate::ui::display_width(l))
-            .collect();
+        let widths: Vec<_> = labels.iter().map(|l| crate::ui::display_width(l)).collect();
         assert!(widths.iter().all(|w| *w == widths[0]));
         assert_eq!(crate::ui::display_width(&header), widths[0]);
         assert!(labels[0].contains("1080P/AVC"));
