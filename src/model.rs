@@ -36,6 +36,15 @@ impl PlatformId {
         }
     }
 
+    /// PascalCase prefix for download filenames (`Wechat_…`, `Douyin_…`).
+    pub const fn file_prefix(self) -> &'static str {
+        match self {
+            Self::Wechat => "Wechat",
+            Self::Douyin => "Douyin",
+            Self::Bilibili => "Bilibili",
+        }
+    }
+
     pub const fn display_name(self) -> &'static str {
         match self {
             Self::Wechat => "微信视频号",
@@ -311,7 +320,7 @@ pub fn download_file_stem(platform: PlatformId, canonical_url: &Url, post_id: &s
     } else {
         slug
     };
-    format!("{}_{slug}", platform.as_str())
+    format!("{}_{slug}", platform.file_prefix())
 }
 
 pub(crate) fn sanitize_filename_component(raw: &str) -> String {
@@ -362,7 +371,7 @@ mod tests {
             sample_source("v.mp4"),
             Vec::new(),
         );
-        assert_eq!(post.download_file_stem(), "wechat_AzJ7CGPYWD");
+        assert_eq!(post.download_file_stem(), "Wechat_AzJ7CGPYWD");
 
         assert_eq!(
             download_file_stem(
@@ -370,7 +379,7 @@ mod tests {
                 &Url::parse("https://www.douyin.com/video/7661946724177829115").unwrap(),
                 "7661946724177829115",
             ),
-            "douyin_7661946724177829115"
+            "Douyin_7661946724177829115"
         );
         assert_eq!(
             download_file_stem(
@@ -378,7 +387,7 @@ mod tests {
                 &Url::parse("https://www.bilibili.com/video/BV1GJ411x7h7").unwrap(),
                 "170001",
             ),
-            "bilibili_BV1GJ411x7h7"
+            "Bilibili_BV1GJ411x7h7"
         );
     }
 

@@ -214,7 +214,7 @@ mod tests {
                 .iter()
                 .any(|h| { h.contains("douyin") || h.contains("snssdk") || h.starts_with('.') })
         );
-        assert_eq!(downloader.file_stem(), Some("douyin_7661946724177829115"));
+        assert_eq!(downloader.file_stem(), Some("Douyin_7661946724177829115"));
     }
 
     #[test]

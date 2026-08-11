@@ -239,7 +239,7 @@ fn uses_a_canonical_hyphenated_uuid_for_temporary_video_names() {
 fn media_task_path_uses_platform_stem_and_sequence() {
     let dir = test_workspace();
     let url = Url::parse("https://cdn.example/v.mp4").unwrap();
-    let stem = "wechat_AzJ7CGPYWD";
+    let stem = "Wechat_AzJ7CGPYWD";
 
     assert_eq!(
         media_task_path(dir.as_path(), &url, Some(stem), 0)
@@ -247,7 +247,7 @@ fn media_task_path_uses_platform_stem_and_sequence() {
             .unwrap()
             .to_str()
             .unwrap(),
-        "wechat_AzJ7CGPYWD.mp4"
+        "Wechat_AzJ7CGPYWD.mp4"
     );
     assert_eq!(
         media_task_path(dir.as_path(), &url, Some(stem), 1)
@@ -255,7 +255,7 @@ fn media_task_path_uses_platform_stem_and_sequence() {
             .unwrap()
             .to_str()
             .unwrap(),
-        "wechat_AzJ7CGPYWD_1.mp4"
+        "Wechat_AzJ7CGPYWD_1.mp4"
     );
 }
 
@@ -263,8 +263,8 @@ fn media_task_path_uses_platform_stem_and_sequence() {
 fn with_file_stem_is_exposed_on_downloader() {
     let downloader = MediaDownloader::for_wechat(test_workspace())
         .unwrap()
-        .with_file_stem("wechat_AzJ7CGPYWD");
-    assert_eq!(downloader.file_stem(), Some("wechat_AzJ7CGPYWD"));
+        .with_file_stem("Wechat_AzJ7CGPYWD");
+    assert_eq!(downloader.file_stem(), Some("Wechat_AzJ7CGPYWD"));
 }
 
 #[test]
