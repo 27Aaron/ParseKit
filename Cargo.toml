@@ -15,7 +15,7 @@ cli = ["dep:clap", "dep:dotenvy"]
 
 [[bin]]
 name = "pk"
-path = "src/bin/pk.rs"
+path = "src/bin/pk/main.rs"
 required-features = ["cli"]
 
 [dependencies]
