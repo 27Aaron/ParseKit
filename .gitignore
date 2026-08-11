@@ -1,0 +1,12 @@
+# Rust build artifacts
+/target/
+**/*.rs.bk
+rustc-ice-*.txt
+
+# Local environment and secrets
+.env
+.env.local
+.env.*.local
+
+# macOS
+.DS_Store
