@@ -3,7 +3,6 @@
 use std::{
     collections::HashSet,
     fs::OpenOptions,
-    path::Path,
     sync::{
         Mutex,
         atomic::{AtomicUsize, Ordering},
@@ -28,10 +27,15 @@ fn allowed_hosts() -> HashSet<String> {
     normalize_allowed_hosts(platforms::wechat::REVIEWED_MEDIA_HOSTS.iter().copied()).unwrap()
 }
 
+/// Ephemeral workspace under the system temp dir (never the repo root).
+fn test_workspace() -> std::path::PathBuf {
+    std::env::temp_dir().join(format!("parse-kit-test-{}", Uuid::new_v4().hyphenated()))
+}
+
 #[test]
 fn with_allowed_hosts_normalizes_and_exposes_the_set() {
     let downloader =
-        MediaDownloader::with_allowed_hosts("media", ["Example.COM", "cdn.example.org"]).unwrap();
+        MediaDownloader::with_allowed_hosts(test_workspace(), ["Example.COM", "cdn.example.org"]).unwrap();
 
     assert!(downloader.allowed_hosts().contains("example.com"));
     assert!(downloader.allowed_hosts().contains("cdn.example.org"));
@@ -41,22 +45,22 @@ fn with_allowed_hosts_normalizes_and_exposes_the_set() {
 #[test]
 fn with_allowed_hosts_rejects_empty_or_invalid_entries() {
     assert!(matches!(
-        MediaDownloader::with_allowed_hosts("media", std::iter::empty::<&str>()),
+        MediaDownloader::with_allowed_hosts(test_workspace(), std::iter::empty::<&str>()),
         Err(Error::Config(_))
     ));
     assert!(matches!(
-        MediaDownloader::with_allowed_hosts("media", [".bad", "ok.example"]),
+        MediaDownloader::with_allowed_hosts(test_workspace(), [".bad", "ok.example"]),
         Err(Error::Config(_))
     ));
     assert!(matches!(
-        MediaDownloader::with_allowed_hosts("media", ["has space.example"]),
+        MediaDownloader::with_allowed_hosts(test_workspace(), ["has space.example"]),
         Err(Error::Config(_))
     ));
 }
 
 #[test]
 fn for_wechat_channels_uses_the_reviewed_host_set() {
-    let downloader = MediaDownloader::for_wechat_channels("media").unwrap();
+    let downloader = MediaDownloader::for_wechat_channels(test_workspace()).unwrap();
     for host in platforms::wechat::REVIEWED_MEDIA_HOSTS {
         assert!(
             downloader.allowed_hosts().contains(*host),
@@ -94,7 +98,7 @@ fn host_allowlist_supports_suffix_rules() {
 
 #[test]
 fn for_douyin_uses_reviewed_host_set() {
-    let downloader = MediaDownloader::for_douyin("media").unwrap();
+    let downloader = MediaDownloader::for_douyin(test_workspace()).unwrap();
     for host in platforms::douyin::REVIEWED_MEDIA_HOSTS {
         assert!(
             downloader.allowed_hosts().contains(*host),
@@ -105,11 +109,11 @@ fn for_douyin_uses_reviewed_host_set() {
 
 #[test]
 fn for_platform_maps_known_ids() {
-    let wechat = MediaDownloader::for_platform(crate::PlatformId::WechatChannels, "media").unwrap();
+    let wechat = MediaDownloader::for_platform(crate::PlatformId::WechatChannels, test_workspace()).unwrap();
     assert!(wechat.allowed_hosts().contains("finder.video.qq.com"));
-    let douyin = MediaDownloader::for_platform(crate::PlatformId::Douyin, "media").unwrap();
+    let douyin = MediaDownloader::for_platform(crate::PlatformId::Douyin, test_workspace()).unwrap();
     assert!(douyin.allowed_hosts().contains("aweme.snssdk.com"));
-    let _ = MediaDownloader::for_platform(crate::PlatformId::Bilibili, "media").unwrap();
+    let _ = MediaDownloader::for_platform(crate::PlatformId::Bilibili, test_workspace()).unwrap();
 }
 
 #[tokio::test]
@@ -208,7 +212,7 @@ fn classifies_only_temporary_http_statuses_for_retry() {
 #[test]
 fn uses_a_canonical_hyphenated_uuid_for_temporary_video_names() {
     let path = random_task_path(
-        Path::new("media"),
+        test_workspace().as_path(),
         &Url::parse("https://cdn.example/v.mp4").unwrap(),
     );
     let file_name = path.file_name().unwrap().to_str().unwrap();
@@ -259,7 +263,7 @@ fn accepts_only_reviewed_https_media_urls() {
 #[tokio::test]
 async fn direct_url_download_still_rejects_disallowed_hosts_before_network_io() {
     let downloader = MediaDownloader::with_options(
-        "media",
+        test_workspace(),
         HashSet::from(["allowed.example".to_owned()]),
         Duration::from_secs(17),
         DownloadRequestIdentity::default(),
@@ -469,7 +473,7 @@ fn into_path_disarms_drop_cleanup() {
 #[test]
 fn with_timeout_tightens_request_timeout() {
     let downloader = MediaDownloader::with_options(
-        "media",
+        test_workspace(),
         HashSet::from(["example.com".to_owned()]),
         Duration::from_secs(120),
         DownloadRequestIdentity::default(),

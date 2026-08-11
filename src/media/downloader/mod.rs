@@ -361,9 +361,7 @@ impl MediaDownloader {
     ) -> Result<DownloadedMedia> {
         // Reuse one path across retries so unencrypted downloads can resume.
         // Encrypted prefixes must restart from byte zero.
-        tokio::fs::create_dir_all(self.workspace_dir.as_path())
-            .await
-            .map_err(|_| Error::Storage(self.workspace_dir.as_ref().clone()))?;
+        // Create the workspace only after URL/host validation succeeds (in stream_response).
         let path = random_task_path(self.workspace_dir.as_path(), url);
         let path = Arc::new(path);
         let allow_resume = decode_key.is_none();
@@ -543,6 +541,12 @@ impl MediaDownloader {
         path: PathBuf,
         resume_from: u64,
     ) -> Result<DownloadedMedia> {
+        // Only create the workspace once we have a validated response to write.
+        if let Some(parent) = path.parent() {
+            tokio::fs::create_dir_all(parent)
+                .await
+                .map_err(|_| Error::Storage(parent.to_path_buf()))?;
+        }
         let pending_file = if resume_from > 0 && path.exists() {
             open_private_file_append(path.clone()).await?
         } else {
