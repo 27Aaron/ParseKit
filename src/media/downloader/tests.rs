@@ -18,7 +18,7 @@ use super::http::check_response_status;
 use super::ssrf::{is_forbidden_ip, normalize_allowed_hosts, validate_media_url};
 use super::write::{
     MIN_FREE_DISK_BYTES, PendingFile, disk_space_is_sufficient, effective_resume_offset,
-    extension_from_url, random_task_path, write_chunks,
+    extension_from_url, media_task_path, random_task_path, write_chunks,
 };
 use super::*;
 use crate::platforms;
@@ -227,6 +227,38 @@ fn uses_a_canonical_hyphenated_uuid_for_temporary_video_names() {
         Uuid::parse_str(uuid).unwrap().hyphenated().to_string(),
         uuid
     );
+}
+
+#[test]
+fn media_task_path_uses_platform_stem_and_sequence() {
+    let dir = test_workspace();
+    let url = Url::parse("https://cdn.example/v.mp4").unwrap();
+    let stem = "wechat_sph_ArPbCgE03d";
+
+    assert_eq!(
+        media_task_path(dir.as_path(), &url, Some(stem), 0)
+            .file_name()
+            .unwrap()
+            .to_str()
+            .unwrap(),
+        "wechat_sph_ArPbCgE03d.mp4"
+    );
+    assert_eq!(
+        media_task_path(dir.as_path(), &url, Some(stem), 1)
+            .file_name()
+            .unwrap()
+            .to_str()
+            .unwrap(),
+        "wechat_sph_ArPbCgE03d_1.mp4"
+    );
+}
+
+#[test]
+fn with_file_stem_is_exposed_on_downloader() {
+    let downloader = MediaDownloader::for_wechat_channels(test_workspace())
+        .unwrap()
+        .with_file_stem("wechat_sph_ArPbCgE03d");
+    assert_eq!(downloader.file_stem(), Some("wechat_sph_ArPbCgE03d"));
 }
 
 #[test]

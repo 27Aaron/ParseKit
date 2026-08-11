@@ -36,8 +36,8 @@ use self::http::{
 use self::progress::ProgressReporter;
 use self::ssrf::{normalize_allowed_hosts, resolve_public_addresses, validate_media_url};
 use self::write::{
-    WrittenMedia, create_private_file, effective_resume_offset, open_private_file_append,
-    random_task_path, write_chunks,
+    WrittenMedia, create_private_file, effective_resume_offset, media_task_path,
+    open_private_file_append, write_chunks,
 };
 
 const MAX_REDIRECTS: usize = 5;
@@ -138,6 +138,8 @@ pub struct MediaDownloader {
     request_timeout: Duration,
     request_identity: DownloadRequestIdentity,
     disk_write_budget: Arc<StdMutex<DiskWriteBudget>>,
+    /// Optional basename without extension, e.g. `wechat_sph_ArPbCgE03d`.
+    file_stem: Option<Arc<str>>,
 }
 
 #[derive(Debug, Default)]
@@ -214,11 +216,30 @@ impl MediaDownloader {
             request_timeout,
             request_identity,
             disk_write_budget: Arc::new(StdMutex::new(DiskWriteBudget::default())),
+            file_stem: None,
         })
     }
 
     pub fn allowed_hosts(&self) -> &std::collections::HashSet<String> {
         self.allowed_hosts.as_ref()
+    }
+
+    /// Sets the download basename (no extension), e.g. `wechat_sph_ArPbCgE03d`.
+    ///
+    /// Single-file downloads use `{stem}.{ext}`; multi-file downloads append
+    /// `_1`, `_2`, … for later items. Without a stem, paths use a random UUID.
+    pub fn with_file_stem(mut self, file_stem: impl Into<String>) -> Self {
+        let stem = file_stem.into();
+        self.file_stem = if stem.is_empty() {
+            None
+        } else {
+            Some(Arc::from(stem))
+        };
+        self
+    }
+
+    pub fn file_stem(&self) -> Option<&str> {
+        self.file_stem.as_deref()
     }
 
     /// Clones this downloader with a tighter request timeout.
@@ -232,20 +253,23 @@ impl MediaDownloader {
             request_timeout: self.request_timeout.min(request_timeout),
             request_identity: self.request_identity.clone(),
             disk_write_budget: Arc::clone(&self.disk_write_budget),
+            file_stem: self.file_stem.clone(),
         })
     }
 
     pub async fn download(&self, source: &MediaSource) -> Result<DownloadedMedia> {
-        self.download_source_with_callback(source, None).await
+        self.download_source_with_callback(source, None, 0).await
     }
 
     pub async fn download_url(&self, url: &Url) -> Result<DownloadedMedia> {
-        self.download_url_with_callback(url, None, None, None).await
+        self.download_url_with_callback(url, None, None, None, 0)
+            .await
     }
 
     /// Downloads each source to a separate file.
     ///
     /// Completed files are removed if a later download fails.
+    /// With a configured file stem, names are `{stem}.{ext}`, `{stem}_1.{ext}`, …
     pub async fn download_all<'a, I>(&self, sources: I) -> Result<Vec<DownloadedMedia>>
     where
         I: IntoIterator<Item = &'a MediaSource>,
@@ -253,8 +277,12 @@ impl MediaDownloader {
         let span = tracing::info_span!("media.download_all");
         async move {
             let mut saved = Vec::new();
-            for source in sources {
-                match self.download(source).await {
+            for (index, source) in sources.into_iter().enumerate() {
+                let sequence = u32::try_from(index).unwrap_or(u32::MAX);
+                match self
+                    .download_source_with_callback(source, None, sequence)
+                    .await
+                {
                     Ok(media) => saved.push(media),
                     Err(error) => {
                         for media in saved.drain(..) {
@@ -291,7 +319,7 @@ impl MediaDownloader {
                     has_decode_key = source.decode_key.is_some()
                 );
                 match self
-                    .download_source_with_callback(source, None)
+                    .download_source_with_callback(source, None, 0)
                     .instrument(attempt)
                     .await
                 {
@@ -334,7 +362,7 @@ impl MediaDownloader {
     where
         F: Fn(DownloadProgress) + Send + Sync + 'static,
     {
-        self.download_source_with_callback(source, Some(Arc::new(on_progress)))
+        self.download_source_with_callback(source, Some(Arc::new(on_progress)), 0)
             .await
     }
 
@@ -342,12 +370,14 @@ impl MediaDownloader {
         &self,
         source: &MediaSource,
         progress_callback: Option<ProgressCallback>,
+        sequence: u32,
     ) -> Result<DownloadedMedia> {
         self.download_url_with_callback(
             &source.url,
             source.size_hint,
             progress_callback,
             source.decode_key,
+            sequence,
         )
         .await
     }
@@ -358,11 +388,17 @@ impl MediaDownloader {
         size_hint: Option<u64>,
         progress_callback: Option<ProgressCallback>,
         decode_key: Option<u64>,
+        sequence: u32,
     ) -> Result<DownloadedMedia> {
         // Reuse one path across retries so unencrypted downloads can resume.
         // Encrypted prefixes must restart from byte zero.
         // Create the workspace only after URL/host validation succeeds (in stream_response).
-        let path = random_task_path(self.workspace_dir.as_path(), url);
+        let path = media_task_path(
+            self.workspace_dir.as_path(),
+            url,
+            self.file_stem.as_deref(),
+            sequence,
+        );
         let path = Arc::new(path);
         let allow_resume = decode_key.is_none();
 
