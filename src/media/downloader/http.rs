@@ -4,7 +4,7 @@ use std::{future::Future, net::SocketAddr, time::Duration};
 
 use reqwest::{
     Client, Response, StatusCode,
-    header::{CONTENT_ENCODING, CONTENT_LENGTH},
+    header::{CONTENT_ENCODING, CONTENT_LENGTH, CONTENT_RANGE, HeaderMap},
     redirect::Policy,
 };
 use tracing::warn;
@@ -96,6 +96,57 @@ pub(super) fn checked_content_length(response: &Response) -> Result<Option<u64>>
         .parse::<u64>()
         .map_err(|_| Error::Download("媒体 Content-Length 无效".to_owned()))?;
     Ok(Some(length))
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) struct ContentRange {
+    pub(super) start: Option<u64>,
+    pub(super) end: Option<u64>,
+    pub(super) total: Option<u64>,
+}
+
+impl ContentRange {
+    pub(super) fn response_length(self) -> Option<u64> {
+        self.end?.checked_sub(self.start?)?.checked_add(1)
+    }
+}
+
+/// Parses the two HTTP forms used by media servers:
+/// `bytes START-END/TOTAL` and the unsatisfied form `bytes */TOTAL`.
+pub(super) fn parse_content_range(headers: &HeaderMap) -> Option<ContentRange> {
+    let raw = headers.get(CONTENT_RANGE)?.to_str().ok()?.trim();
+    let (unit, value) = raw.split_once(' ')?;
+    if !unit.eq_ignore_ascii_case("bytes") {
+        return None;
+    }
+    let (range, total) = value.trim().split_once('/')?;
+    let total = match total.trim() {
+        "*" => None,
+        value => Some(value.parse::<u64>().ok()?),
+    };
+
+    if range.trim() == "*" {
+        return total.map(|total| ContentRange {
+            start: None,
+            end: None,
+            total: Some(total),
+        });
+    }
+
+    let (start, end) = range.trim().split_once('-')?;
+    let start = start.parse::<u64>().ok()?;
+    let end = end.parse::<u64>().ok()?;
+    if start > end
+        || end.checked_sub(start)?.checked_add(1).is_none()
+        || total.is_some_and(|total| end >= total)
+    {
+        return None;
+    }
+    Some(ContentRange {
+        start: Some(start),
+        end: Some(end),
+        total,
+    })
 }
 
 pub(super) fn reject_encoded_response(response: &Response) -> Result<()> {

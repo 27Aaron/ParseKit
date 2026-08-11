@@ -14,12 +14,13 @@ use tokio::sync::mpsc;
 use url::Url;
 use uuid::Uuid;
 
-use super::http::check_response_status;
+use super::http::{check_response_status, parse_content_range};
 use super::ssrf::{is_forbidden_ip, normalize_allowed_hosts, validate_media_url};
 use super::write::{
     MIN_FREE_DISK_BYTES, PendingFile, disk_space_is_sufficient, effective_resume_offset,
-    existing_complete_download, extension_from_content_type, extension_from_url, media_task_path,
-    path_with_better_extension, write_chunks,
+    existing_complete_download, extension_from_content_type, extension_from_url,
+    looks_like_media_header, media_task_path, path_with_better_extension, safe_file_stem,
+    write_chunks,
 };
 use super::*;
 use crate::platforms;
@@ -56,6 +57,33 @@ fn with_allowed_hosts_rejects_empty_or_invalid_entries() {
     ));
     assert!(matches!(
         MediaDownloader::with_allowed_hosts(test_workspace(), ["has space.example"]),
+        Err(Error::Config(_))
+    ));
+    for invalid in [
+        "-edge.example",
+        "edge-.example",
+        "a................................................................example",
+    ] {
+        assert!(matches!(
+            MediaDownloader::with_allowed_hosts(test_workspace(), [invalid]),
+            Err(Error::Config(_))
+        ));
+    }
+}
+
+#[test]
+fn with_options_rejects_invalid_identity_headers() {
+    let identity = DownloadRequestIdentity {
+        user_agent: Some("valid\r\ninjected: value".to_owned()),
+        ..DownloadRequestIdentity::default()
+    };
+    assert!(matches!(
+        MediaDownloader::with_options(
+            test_workspace(),
+            ["media.example"],
+            Duration::from_secs(1),
+            identity,
+        ),
         Err(Error::Config(_))
     ));
 }
@@ -260,11 +288,30 @@ fn media_task_path_uses_platform_stem_and_sequence() {
 }
 
 #[test]
+fn media_task_path_confines_untrusted_stems_to_the_workspace() {
+    let dir = test_workspace();
+    let url = Url::parse("https://cdn.example/v.mp4").unwrap();
+    let path = media_task_path(dir.as_path(), &url, Some("../../outside/video"), 0);
+
+    assert_eq!(path.parent(), Some(dir.as_path()));
+    assert_eq!(path.file_name().unwrap(), "outside_video.mp4");
+    assert_eq!(safe_file_stem("___"), None);
+}
+
+#[test]
 fn with_file_stem_is_exposed_on_downloader() {
     let downloader = MediaDownloader::for_wechat(test_workspace())
         .unwrap()
         .with_file_stem("Wechat_AzJ7CGPYWD");
     assert_eq!(downloader.file_stem(), Some("Wechat_AzJ7CGPYWD"));
+}
+
+#[test]
+fn with_file_stem_sanitizes_path_components() {
+    let downloader = MediaDownloader::for_wechat(test_workspace())
+        .unwrap()
+        .with_file_stem("../Wechat Demo/clip");
+    assert_eq!(downloader.file_stem(), Some("Wechat_Demo_clip"));
 }
 
 #[test]
@@ -284,6 +331,7 @@ fn accepts_only_reviewed_https_media_urls() {
         "https://finder.video.qq.com./path",
         "https://qq.com/path",
         "https://127.0.0.1/path",
+        "https://finder.video.qq.com:0/path",
     ] {
         let url = Url::parse(raw).unwrap();
         assert!(validate_media_url(&url, &allowed).is_err(), "{raw}");
@@ -333,7 +381,21 @@ fn classifies_non_public_ipv4_addresses() {
 
 #[test]
 fn classifies_non_public_ipv6_addresses() {
-    for raw in ["::", "::1", "fc00::1", "fe80::1", "ff02::1", "2001:db8::1"] {
+    for raw in [
+        "::",
+        "::1",
+        "::127.0.0.1",
+        "64:ff9b:1::1",
+        "100::1",
+        "2001:2::1",
+        "2001:20::1",
+        "3fff::1",
+        "5f00::1",
+        "fc00::1",
+        "fe80::1",
+        "ff02::1",
+        "2001:db8::1",
+    ] {
         assert!(is_forbidden_ip(raw.parse().unwrap()), "{raw}");
     }
     assert!(!is_forbidden_ip("2606:4700:4700::1111".parse().unwrap()));
@@ -388,7 +450,7 @@ fn reports_each_crossed_threshold_once_after_writes() {
     let callback: ProgressCallback = Arc::new(move |progress| {
         callback_events.lock().unwrap().push(progress);
     });
-    let (reporter, guard) = ProgressReporter::new(Some(8), Some(callback));
+    let (reporter, guard) = ProgressReporter::new(Some(8), Some(callback), 0);
     let guard = guard.unwrap();
 
     let (sender, mut receiver) = mpsc::channel(4);
@@ -427,6 +489,13 @@ fn reports_each_crossed_threshold_once_after_writes() {
     let percents: Vec<u8> = events.lock().unwrap().iter().map(|e| e.percent).collect();
     assert_eq!(*percents.last().unwrap(), 100);
     assert!(percents.contains(&100));
+    let event_count = percents.len();
+    outcome
+        .progress_reporter
+        .as_mut()
+        .unwrap()
+        .report_complete(outcome.media.bytes);
+    assert_eq!(events.lock().unwrap().len(), event_count);
 
     drop(guard);
     drop(outcome);
@@ -437,7 +506,7 @@ fn reports_each_crossed_threshold_once_after_writes() {
 #[test]
 fn does_not_report_percent_without_a_trusted_total() {
     let callback: ProgressCallback = Arc::new(|_| panic!("unexpected progress event"));
-    let (reporter, guard) = ProgressReporter::new(None, Some(callback));
+    let (reporter, guard) = ProgressReporter::new(None, Some(callback), 0);
     assert!(reporter.is_none());
     assert!(guard.is_none());
 }
@@ -449,13 +518,27 @@ fn progress_guard_suppresses_events_after_cancellation() {
     let callback: ProgressCallback = Arc::new(move |progress| {
         callback_events.lock().unwrap().push(progress);
     });
-    let (mut reporter, guard) = ProgressReporter::new(Some(100), Some(callback));
+    let (mut reporter, guard) = ProgressReporter::new(Some(100), Some(callback), 0);
     drop(guard);
 
     reporter.as_mut().unwrap().report_intermediate(75);
     reporter.as_mut().unwrap().report_complete(100);
 
     assert!(events.lock().unwrap().is_empty());
+}
+
+#[test]
+fn resumed_progress_does_not_replay_completed_thresholds() {
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let callback_events = Arc::clone(&events);
+    let callback: ProgressCallback = Arc::new(move |progress| {
+        callback_events.lock().unwrap().push(progress.percent);
+    });
+    let (mut reporter, _guard) = ProgressReporter::new(Some(100), Some(callback), 60);
+
+    reporter.as_mut().unwrap().report_intermediate(65);
+
+    assert_eq!(events.lock().unwrap().as_slice(), &[61, 62, 63, 64, 65]);
 }
 
 #[test]
@@ -468,6 +551,37 @@ fn effective_resume_offset_handles_partial_and_full_ok() {
     );
     assert_eq!(effective_resume_offset(100, StatusCode::OK), Some(0));
     assert_eq!(effective_resume_offset(100, StatusCode::NOT_FOUND), None);
+}
+
+#[test]
+fn parses_and_validates_content_ranges() {
+    use reqwest::header::{CONTENT_RANGE, HeaderMap, HeaderValue};
+
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        CONTENT_RANGE,
+        HeaderValue::from_static("bytes 100-199/1000"),
+    );
+    let range = parse_content_range(&headers).unwrap();
+    assert_eq!(range.start, Some(100));
+    assert_eq!(range.end, Some(199));
+    assert_eq!(range.total, Some(1000));
+    assert_eq!(range.response_length(), Some(100));
+
+    headers.insert(CONTENT_RANGE, HeaderValue::from_static("bytes */1000"));
+    let range = parse_content_range(&headers).unwrap();
+    assert_eq!(
+        (range.start, range.end, range.total),
+        (None, None, Some(1000))
+    );
+
+    for invalid in ["items 0-1/2", "bytes 2-1/3", "bytes 0-3/3"] {
+        headers.insert(
+            CONTENT_RANGE,
+            HeaderValue::from_bytes(invalid.as_bytes()).unwrap(),
+        );
+        assert!(parse_content_range(&headers).is_none(), "{invalid}");
+    }
 }
 
 #[test]
@@ -511,10 +625,42 @@ fn extension_from_content_type_maps_common_mimes() {
         Some("mp4")
     );
     assert_eq!(extension_from_content_type("image/jpeg"), Some("jpg"));
+    assert_eq!(extension_from_content_type("video/mpeg"), Some("mpg"));
+    assert_eq!(extension_from_content_type("video/mp2t"), Some("ts"));
+    assert_eq!(extension_from_content_type("audio/aac"), Some("aac"));
+    assert_eq!(extension_from_content_type("image/avif"), Some("avif"));
     assert_eq!(
         extension_from_content_type("application/octet-stream"),
         None
     );
+    assert_eq!(extension_from_content_type("image/svg+xml"), None);
+}
+
+#[test]
+fn transport_stream_signature_requires_multiple_packets() {
+    let mut transport_stream = vec![0_u8; 377];
+    transport_stream[0] = 0x47;
+    transport_stream[188] = 0x47;
+    transport_stream[376] = 0x47;
+
+    assert!(looks_like_media_header(&transport_stream));
+    assert!(!looks_like_media_header(&[0x47; 16]));
+}
+
+#[test]
+fn mpeg_audio_signature_rejects_reserved_header_fields() {
+    assert!(looks_like_media_header(&[0xff, 0xfb, 0x90, 0x64]));
+    assert!(!looks_like_media_header(&[0xff, 0xe8, 0x90, 0x64]));
+    assert!(!looks_like_media_header(&[0xff, 0xfb, 0xf0, 0x64]));
+}
+
+#[test]
+fn recognizes_common_stream_container_signatures() {
+    assert!(looks_like_media_header(b"OggS\0\x02payload"));
+    assert!(looks_like_media_header(&[0, 0, 1, 0xba, 0, 0, 0, 0]));
+    assert!(looks_like_media_header(&[
+        0xff, 0xf1, 0x50, 0x80, 0, 0x1f, 0xfc,
+    ]));
 }
 
 #[test]
@@ -551,6 +697,34 @@ async fn existing_complete_download_reuses_bmff_file() {
     // Smaller than size_hint → treat as incomplete.
     assert!(
         existing_complete_download(dir.as_path(), Some("wechat_demo"), 0, "mp4", Some(4096))
+            .await
+            .is_none()
+    );
+
+    // Matching length alone must not make an unrelated/corrupt file reusable.
+    let invalid = dir.join("invalid.mp4");
+    std::fs::write(&invalid, vec![b'x'; 2048]).unwrap();
+    assert!(
+        existing_complete_download(dir.as_path(), Some("invalid"), 0, "mp4", Some(2048))
+            .await
+            .is_none()
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn existing_complete_download_never_reuses_a_symlink() {
+    let dir = test_workspace();
+    std::fs::create_dir_all(&dir).unwrap();
+    let target = dir.join("outside.mp4");
+    std::fs::write(&target, vec![0_u8; 2048]).unwrap();
+    let link = dir.join("wechat_demo.mp4");
+    std::os::unix::fs::symlink(&target, &link).unwrap();
+
+    assert!(
+        existing_complete_download(dir.as_path(), Some("wechat_demo"), 0, "mp4", Some(1024))
             .await
             .is_none()
     );

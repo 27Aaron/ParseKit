@@ -12,7 +12,7 @@ pub(super) struct ProgressReporter {
     callback: ProgressCallback,
     total_bytes: u64,
     /// Next whole percent to emit (1..=100).
-    next_percent: u8,
+    next_percent: u16,
     active: Arc<AtomicBool>,
 }
 
@@ -20,6 +20,7 @@ impl ProgressReporter {
     pub(super) fn new(
         content_length: Option<u64>,
         callback: Option<ProgressCallback>,
+        initial_bytes: u64,
     ) -> (Option<Self>, Option<ProgressGuard>) {
         let Some(total_bytes) = content_length.filter(|total| *total > 0) else {
             return (None, None);
@@ -29,11 +30,15 @@ impl ProgressReporter {
         };
 
         let active = Arc::new(AtomicBool::new(true));
+        let already_reached =
+            ((u128::from(initial_bytes) * 100) / u128::from(total_bytes)).min(99) as u16;
         (
             Some(Self {
                 callback,
                 total_bytes,
-                next_percent: 1,
+                // A resumed download must not replay progress thresholds that the
+                // partial file has already crossed.
+                next_percent: already_reached.saturating_add(1),
                 active: Arc::clone(&active),
             }),
             Some(ProgressGuard { active }),
@@ -50,7 +55,7 @@ impl ProgressReporter {
 
     fn report_crossed(&mut self, downloaded_bytes: u64, include_complete: bool) {
         let reached =
-            ((u128::from(downloaded_bytes) * 100) / u128::from(self.total_bytes)).min(100) as u8;
+            ((u128::from(downloaded_bytes) * 100) / u128::from(self.total_bytes)).min(100) as u16;
         let max_emit = if include_complete {
             100
         } else {
@@ -58,8 +63,9 @@ impl ProgressReporter {
         };
 
         while self.next_percent <= max_emit {
-            let percent = self.next_percent;
-            self.next_percent = self.next_percent.saturating_add(1);
+            let percent =
+                u8::try_from(self.next_percent).expect("progress percentages never exceed 100");
+            self.next_percent += 1;
             if self.active.load(Ordering::Acquire) {
                 (self.callback)(DownloadProgress {
                     downloaded_bytes,

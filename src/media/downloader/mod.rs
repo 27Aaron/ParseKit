@@ -20,7 +20,7 @@ use std::{
 
 use reqwest::{
     Client, Response,
-    header::{ACCEPT, ACCEPT_ENCODING, ORIGIN, REFERER, USER_AGENT},
+    header::{ACCEPT, ACCEPT_ENCODING, HeaderValue, ORIGIN, REFERER, USER_AGENT},
 };
 use tokio::time::timeout;
 use tracing::Instrument;
@@ -33,15 +33,15 @@ use crate::{
 };
 
 use self::http::{
-    check_response_status, checked_content_length, map_reqwest_download_error, pinned_http_client,
-    reject_encoded_response, retry_transient_downloads,
+    check_response_status, checked_content_length, map_reqwest_download_error, parse_content_range,
+    pinned_http_client, reject_encoded_response, retry_transient_downloads,
 };
 use self::progress::ProgressReporter;
 use self::ssrf::{normalize_allowed_hosts, resolve_public_addresses, validate_media_url};
 use self::write::{
     WrittenMedia, create_private_file, effective_resume_offset, existing_complete_download,
     extension_from_content_type, extension_from_url, media_task_path, open_private_file_append,
-    path_with_better_extension, write_chunks,
+    path_with_better_extension, safe_file_stem, write_chunks,
 };
 
 const MAX_REDIRECTS: usize = 5;
@@ -145,6 +145,39 @@ impl DownloadedMedia {
     pub fn keep(self) -> PathBuf {
         self.into_path()
     }
+
+    async fn relocate(mut self, target: PathBuf) -> Result<Self> {
+        if self.path == target {
+            return Ok(self);
+        }
+        if tokio::fs::rename(&self.path, &target).await.is_err() {
+            #[cfg(not(windows))]
+            return Err(Error::Storage(target));
+
+            #[cfg(windows)]
+            {
+                // Windows does not replace an existing destination atomically. Only
+                // remove a confirmed existing regular file after the first rename
+                // proves that a fallback is needed.
+                match tokio::fs::symlink_metadata(&target).await {
+                    Ok(metadata) if metadata.is_file() => {}
+                    Ok(_) => return Err(Error::Storage(target)),
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                        return Err(Error::Storage(target));
+                    }
+                    Err(_) => return Err(Error::Storage(target)),
+                }
+                tokio::fs::remove_file(&target)
+                    .await
+                    .map_err(|_| Error::Storage(target.clone()))?;
+                tokio::fs::rename(&self.path, &target)
+                    .await
+                    .map_err(|_| Error::Storage(target.clone()))?;
+            }
+        }
+        self.path = target;
+        Ok(self)
+    }
 }
 
 impl Drop for DownloadedMedia {
@@ -222,6 +255,7 @@ impl MediaDownloader {
             return Err(Error::Config("媒体下载超时必须大于零".to_owned()));
         }
         let allowed_hosts = normalize_allowed_hosts(allowed_hosts)?;
+        validate_request_identity(&request_identity)?;
 
         Ok(Self {
             workspace_dir: Arc::new(workspace_dir.into()),
@@ -240,11 +274,7 @@ impl MediaDownloader {
 
     pub fn with_file_stem(mut self, file_stem: impl Into<String>) -> Self {
         let stem = file_stem.into();
-        self.file_stem = if stem.is_empty() {
-            None
-        } else {
-            Some(Arc::from(stem))
-        };
+        self.file_stem = safe_file_stem(&stem).map(Arc::from);
         self
     }
 
@@ -306,7 +336,8 @@ impl MediaDownloader {
         async move {
             let mut saved = Vec::new();
             for (index, source) in sources.into_iter().enumerate() {
-                let sequence = u32::try_from(index).unwrap_or(u32::MAX);
+                let sequence = u32::try_from(index)
+                    .map_err(|_| Error::Config("媒体源数量超出支持范围".into()))?;
                 match self
                     .download_source_with_callback(source, None, sequence)
                     .await
@@ -486,14 +517,13 @@ impl MediaDownloader {
                     let progress_callback = progress_callback.clone();
                     async move {
                         let resume_from = if allow_resume {
-                            tokio::fs::metadata(path.as_path())
+                            tokio::fs::symlink_metadata(path.as_path())
                                 .await
-                                .map(|meta| meta.len())
-                                .unwrap_or(0)
+                                .ok()
+                                .filter(|meta| meta.is_file() && !meta.file_type().is_symlink())
+                                .map_or(0, |meta| meta.len())
                         } else {
-                            if path.exists() {
-                                let _ = tokio::fs::remove_file(path.as_path()).await;
-                            }
+                            let _ = tokio::fs::remove_file(path.as_path()).await;
                             0
                         };
                         self.download_url_within_deadline(
@@ -525,13 +555,20 @@ impl MediaDownloader {
         _size_hint: Option<u64>,
         progress_callback: Option<ProgressCallback>,
         decode_key: Option<u64>,
-        mut path: PathBuf,
+        path: PathBuf,
         mut resume_from: u64,
     ) -> Result<DownloadedMedia> {
         // Allow one full restart when a server ignores `Range`.
         for _ in 0..2 {
             let response = self.follow_redirects(url.clone(), resume_from).await?;
             let status = response.status();
+            if resume_from > 0 && status == reqwest::StatusCode::RANGE_NOT_SATISFIABLE {
+                // The local partial may be stale or already at the remote length.
+                // A clean retry is safer than appending or treating it as complete.
+                let _ = tokio::fs::remove_file(&path).await;
+                resume_from = 0;
+                continue;
+            }
             let Some(next_resume) = effective_resume_offset(resume_from, status) else {
                 // A status without resume semantics is handled as an error.
                 return check_response_status(status)
@@ -550,39 +587,58 @@ impl MediaDownloader {
             }
             reject_encoded_response(&response)?;
 
-            // Upgrade provisional `.bin` using Content-Type when the URL had no suffix.
-            if resume_from == 0 {
-                if let Some(ext) = response
-                    .headers()
-                    .get(reqwest::header::CONTENT_TYPE)
-                    .and_then(|value| value.to_str().ok())
-                    .and_then(extension_from_content_type)
-                {
-                    path = path_with_better_extension(path, ext);
-                }
-                // Encrypted WeChat prefixes are always BMFF video containers.
-                if decode_key.is_some() {
-                    path = path_with_better_extension(path, "mp4");
-                }
+            // Keep the provisional path stable until the download is complete so a
+            // failed extension-less transfer can resume on the next attempt.
+            let mut completed_path = path.clone();
+            if let Some(ext) = response
+                .headers()
+                .get(reqwest::header::CONTENT_TYPE)
+                .and_then(|value| value.to_str().ok())
+                .and_then(extension_from_content_type)
+            {
+                completed_path = path_with_better_extension(completed_path, ext);
+            }
+            // Encrypted WeChat prefixes are always BMFF video containers.
+            if decode_key.is_some() {
+                completed_path = path_with_better_extension(completed_path, "mp4");
             }
 
             let content_length = checked_content_length(&response)?;
-            let total_hint = if resume_from > 0 {
-                content_length.map(|len| len.saturating_add(resume_from))
+            let (total_hint, ranged_response_length) = if resume_from > 0 {
+                let range = parse_content_range(response.headers());
+                let valid_range = range.is_some_and(|range| {
+                    range.start == Some(resume_from)
+                        && range.total.is_some()
+                        && content_length
+                            .is_none_or(|length| range.response_length() == Some(length))
+                });
+                if !valid_range {
+                    // A non-conforming range response cannot be appended safely.
+                    // Discard the partial and make the loop's one clean request.
+                    let _ = tokio::fs::remove_file(&path).await;
+                    resume_from = 0;
+                    continue;
+                }
+                let range = range.expect("validated range is present");
+                (range.total, range.response_length())
             } else {
-                content_length
+                (content_length, None)
             };
+            if total_hint == Some(0) {
+                return Err(Error::InvalidMedia("媒体响应为空".to_owned()));
+            }
 
-            return self
+            let media = self
                 .stream_response(
                     response,
-                    total_hint,
+                    (total_hint, ranged_response_length),
                     progress_callback,
                     decode_key,
                     path,
                     resume_from,
                 )
-                .await;
+                .await?;
+            return media.relocate(completed_path).await;
         }
         Err(Error::Download("媒体下载重试逻辑失败".into()))
     }
@@ -663,20 +719,21 @@ impl MediaDownloader {
     async fn stream_response(
         &self,
         mut response: Response,
-        content_length: Option<u64>,
+        length_hints: (Option<u64>, Option<u64>),
         progress_callback: Option<ProgressCallback>,
         decode_key: Option<u64>,
         path: PathBuf,
         resume_from: u64,
     ) -> Result<DownloadedMedia> {
+        let (content_length, ranged_response_length) = length_hints;
         // Only create the workspace once we have a validated response to write.
         if let Some(parent) = path.parent() {
             tokio::fs::create_dir_all(parent)
                 .await
                 .map_err(|_| Error::Storage(parent.to_path_buf()))?;
         }
-        let pending_file = if resume_from > 0 && path.exists() {
-            open_private_file_append(path.clone()).await?
+        let pending_file = if resume_from > 0 {
+            open_private_file_append(path.clone(), resume_from).await?
         } else {
             let _ = tokio::fs::remove_file(&path).await;
             create_private_file(path.clone()).await?
@@ -684,7 +741,7 @@ impl MediaDownloader {
         let (sender, mut receiver) = tokio::sync::mpsc::channel(4);
         let disk_write_budget = Arc::clone(&self.disk_write_budget);
         let (progress_reporter, _progress_guard) =
-            ProgressReporter::new(content_length, progress_callback);
+            ProgressReporter::new(content_length, progress_callback, resume_from);
         // Decryption starts at byte zero, so resumed writes never initialize XOR state.
         let prefix_xor = if resume_from == 0 {
             decode_key.map(crate::platforms::wechat::PrefixXor::new)
@@ -736,13 +793,31 @@ impl MediaDownloader {
             }
         };
 
-        let outcome = match stream_result.and(writer_result) {
-            Ok(outcome) => outcome,
-            Err(error) => return Err(error),
-        };
+        // Prefer the writer's concrete I/O/storage error when both halves fail.
+        let outcome = writer_result?;
+        if let Err(error) = stream_result {
+            if decode_key.is_none() && outcome.media.bytes > 0 && matches!(error, Error::Network(_))
+            {
+                // Keep a valid unencrypted prefix for the retry closure. The outer
+                // operation removes it if all retries ultimately fail.
+                let _ = outcome.media.into_path();
+            }
+            return Err(error);
+        }
 
         if outcome.media.bytes != streamed_bytes {
             return Err(Error::Download("媒体文件写入不完整".to_owned()));
+        }
+        if let Some(expected) = ranged_response_length {
+            let transferred = streamed_bytes.saturating_sub(resume_from);
+            if transferred != expected {
+                if decode_key.is_none() && transferred < expected {
+                    let _ = outcome.media.into_path();
+                }
+                return Err(Error::Network(
+                    "媒体分段响应大小与 Content-Range 不一致".to_owned(),
+                ));
+            }
         }
         if resume_from > 0 {
             tracing::debug!(
@@ -761,9 +836,16 @@ impl MediaDownloader {
             return Err(Error::Download("媒体文件落盘大小不一致".to_owned()));
         }
 
+        if disk_bytes == 0 {
+            return Err(Error::InvalidMedia("媒体响应为空".to_owned()));
+        }
+
         if let Some(expected) = content_length
             && disk_bytes != expected
         {
+            if decode_key.is_none() && disk_bytes < expected {
+                let _ = outcome.media.into_path();
+            }
             return Err(Error::Network(
                 "媒体文件大小与 Content-Length 不一致".to_owned(),
             ));
@@ -779,4 +861,19 @@ impl MediaDownloader {
 
         Ok(media)
     }
+}
+
+fn validate_request_identity(identity: &DownloadRequestIdentity) -> Result<()> {
+    for value in [
+        identity.origin.as_deref(),
+        identity.referer.as_deref(),
+        identity.user_agent.as_deref(),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        HeaderValue::try_from(value)
+            .map_err(|_| Error::Config("媒体请求标识包含无效 HTTP 头值".to_owned()))?;
+    }
+    Ok(())
 }

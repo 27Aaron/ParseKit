@@ -1,21 +1,27 @@
 //! Best-effort `Content-Length` probing when parsers omit `size_hint`.
 
-use std::{collections::HashSet, time::Duration};
+use std::{
+    collections::{HashMap, HashSet},
+    sync::Arc,
+    time::Duration,
+};
 
 use reqwest::{
     Client, Method, StatusCode,
     header::{ACCEPT, ACCEPT_ENCODING, CONTENT_LENGTH, ORIGIN, RANGE, REFERER, USER_AGENT},
     redirect::Policy,
 };
-use tokio::time::timeout;
+use tokio::{sync::Semaphore, task::JoinSet, time::timeout_at};
 use url::Url;
 
 use crate::{ResolvedPost, Result, media::DownloadRequestIdentity, platforms};
 
 use super::CONNECT_TIMEOUT;
+use super::http::parse_content_range;
 use super::ssrf::{normalize_allowed_hosts, resolve_public_addresses, validate_media_url};
 
 const PROBE_TIMEOUT: Duration = Duration::from_secs(8);
+const MAX_CONCURRENT_PROBES: usize = 4;
 const MAX_REDIRECTS: usize = 5;
 const DEFAULT_UA: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 \
      (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36";
@@ -30,27 +36,61 @@ pub async fn enrich_missing_size_hints(post: &mut ResolvedPost) {
         return;
     };
 
-    let missing: Vec<(usize, Url)> = post
+    // A post may expose the same CDN URL in more than one fallback slot. Probe
+    // each unique URL once, while preserving source order for predictable load.
+    let mut missing = Vec::<(Url, Vec<usize>)>::new();
+    let mut positions = HashMap::<Url, usize>::new();
+    for (index, source) in post
         .media_sources()
         .enumerate()
         .filter(|(_, source)| source.size_hint.is_none())
-        .map(|(index, source)| (index, source.url.clone()))
-        .collect();
+    {
+        if let Some(position) = positions.get(&source.url).copied() {
+            missing[position].1.push(index);
+        } else {
+            positions.insert(source.url.clone(), missing.len());
+            missing.push((source.url.clone(), vec![index]));
+        }
+    }
 
-    for (index, url) in missing {
-        let size = match timeout(
-            PROBE_TIMEOUT,
-            probe_content_length(&url, &identity, &allowed),
-        )
-        .await
-        {
-            Ok(Ok(size)) => size,
-            _ => None,
-        };
-        if let Some(bytes) = size
-            && let Some(source) = post.media_source_at_mut(index)
-        {
-            source.size_hint = Some(bytes);
+    let identity = Arc::new(identity);
+    let allowed = Arc::new(allowed);
+    let permits = Arc::new(Semaphore::new(MAX_CONCURRENT_PROBES));
+    let mut probes = JoinSet::new();
+    for (url, indices) in missing {
+        let identity = Arc::clone(&identity);
+        let allowed = Arc::clone(&allowed);
+        let permits = Arc::clone(&permits);
+        probes.spawn(async move {
+            let Ok(_permit) = permits.acquire_owned().await else {
+                return (indices, None);
+            };
+            let size = probe_content_length(&url, &identity, &allowed)
+                .await
+                .ok()
+                .flatten();
+            (indices, size)
+        });
+    }
+
+    // Size hints are optional: cap the whole enrichment phase, not every URL
+    // serially, so a large image set cannot delay resolution by N × timeout.
+    let deadline = tokio::time::Instant::now() + PROBE_TIMEOUT;
+    loop {
+        match timeout_at(deadline, probes.join_next()).await {
+            Ok(Some(Ok((indices, Some(bytes))))) => {
+                for index in indices {
+                    if let Some(source) = post.media_source_at_mut(index) {
+                        source.size_hint = Some(bytes);
+                    }
+                }
+            }
+            Ok(Some(Ok((_, None)) | Err(_))) => {}
+            Ok(None) => break,
+            Err(_) => {
+                probes.abort_all();
+                break;
+            }
         }
     }
 }
@@ -84,7 +124,7 @@ async fn probe_content_length(
             }
             return Ok(None);
         }
-        if let Some(len) = size_from_response(&head, false) {
+        if let Some(len) = size_from_response(&head) {
             return Ok(Some(len));
         }
 
@@ -97,7 +137,7 @@ async fn probe_content_length(
             }
             return Ok(None);
         }
-        if let Some(len) = size_from_response(&ranged, true) {
+        if let Some(len) = size_from_response(&ranged) {
             return Ok(Some(len));
         }
         return Ok(None);
@@ -105,20 +145,20 @@ async fn probe_content_length(
     Ok(None)
 }
 
-fn size_from_response(response: &reqwest::Response, ranged: bool) -> Option<u64> {
+fn size_from_response(response: &reqwest::Response) -> Option<u64> {
     let status = response.status();
     if status != StatusCode::OK && status != StatusCode::PARTIAL_CONTENT {
         return None;
     }
-    if let Some(total) = content_range_total(response.headers()) {
+    if let Some(total) = content_range_total(response.headers()).filter(|total| *total > 0) {
         return Some(total);
     }
-    let len = content_length_header(response.headers())?;
-    // Range responses often report Content-Length: 1 (the slice), not the file.
-    if ranged && len <= 1 {
+    // A 206 Content-Length describes only the returned range, never the whole
+    // representation. Without a valid Content-Range total it is not a size hint.
+    if status == StatusCode::PARTIAL_CONTENT {
         return None;
     }
-    Some(len)
+    content_length_header(response.headers()).filter(|len| *len > 0)
 }
 
 async fn request_raw(
@@ -155,12 +195,7 @@ fn content_length_header(headers: &reqwest::header::HeaderMap) -> Option<u64> {
 
 /// Parses `Content-Range: bytes 0-0/123456` → `123456`.
 pub(super) fn content_range_total(headers: &reqwest::header::HeaderMap) -> Option<u64> {
-    let raw = headers.get(reqwest::header::CONTENT_RANGE)?.to_str().ok()?;
-    let total = raw.rsplit('/').next()?;
-    if total == "*" {
-        return None;
-    }
-    total.parse().ok()
+    parse_content_range(headers)?.total
 }
 
 fn redirect_location(response: &reqwest::Response, current: &Url) -> Option<Url> {
@@ -195,5 +230,22 @@ mod tests {
             HeaderValue::from_static("bytes 0-0/*"),
         );
         assert_eq!(content_range_total(&headers), None);
+    }
+
+    #[test]
+    fn rejects_malformed_content_range() {
+        let mut headers = HeaderMap::new();
+        for raw in [
+            "items 0-0/10",
+            "bytes 2-1/10",
+            "bytes 0-10/10",
+            "bytes nonsense/10",
+        ] {
+            headers.insert(
+                reqwest::header::CONTENT_RANGE,
+                HeaderValue::from_bytes(raw.as_bytes()).unwrap(),
+            );
+            assert_eq!(content_range_total(&headers), None, "{raw}");
+        }
     }
 }

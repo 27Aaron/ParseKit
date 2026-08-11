@@ -30,6 +30,9 @@ pub(super) fn validate_media_url<'a>(
     if url.fragment().is_some() {
         return Err(Error::Download("媒体地址不能包含片段标识".to_owned()));
     }
+    if url.port() == Some(0) {
+        return Err(Error::Download("媒体地址端口无效".to_owned()));
+    }
 
     let host = match url.host() {
         Some(Host::Domain(host)) if !host.ends_with('.') => host,
@@ -105,23 +108,36 @@ pub(super) fn is_forbidden_ipv6(ip: Ipv6Addr) -> bool {
     ip.is_unspecified()
         || ip.is_loopback()
         || ip.is_multicast()
+        || segments[..6] == [0; 6] // Deprecated IPv4-compatible address space (::/96).
         || (segments[0] & 0xfe00) == 0xfc00 // Unique-local addresses.
         || (segments[0] & 0xffc0) == 0xfe80 // Link-local addresses.
         || (segments[0] & 0xffc0) == 0xfec0 // Deprecated site-local addresses.
-        || (segments[0] == 0x0064 && segments[1] == 0xff9b) // Well-known NAT64 prefix.
+        || (segments[0] == 0x0064
+            && segments[1] == 0xff9b
+            && (segments[2..6] == [0; 4] || segments[2] == 1)) // NAT64 prefixes.
+        || (segments[0] == 0x0100 && segments[1] == 0 && segments[2] == 0 && segments[3] == 0) // Discard-only.
         || segments[0] == 0x2002 // 6to4.
         || (segments[0] == 0x2001 && segments[1] == 0) // Teredo.
+        || (segments[0] == 0x2001 && segments[1] == 2) // Benchmarking.
+        || (segments[0] == 0x2001 && (segments[1] & 0xfff0) == 0x0010) // ORCHID.
+        || (segments[0] == 0x2001 && (segments[1] & 0xfff0) == 0x0020) // ORCHIDv2.
         || (segments[0] == 0x2001 && segments[1] == 0x0db8) // Documentation.
+        || (segments[0] == 0x3fff && (segments[1] & 0xf000) == 0) // Documentation (3fff::/20).
+        || segments[0] == 0x5f00 // Segment-routing SIDs.
 }
 
 pub(super) fn valid_host_name(host: &str) -> bool {
     !host.is_empty()
-        && !host.starts_with('.')
-        && !host.ends_with('.')
-        && !host.contains("..")
-        && host
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-'))
+        && host.len() <= 253
+        && host.split('.').all(|label| {
+            !label.is_empty()
+                && label.len() <= 63
+                && !label.starts_with('-')
+                && !label.ends_with('-')
+                && label
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+        })
 }
 
 pub(super) fn valid_allowlist_entry(entry: &str) -> bool {

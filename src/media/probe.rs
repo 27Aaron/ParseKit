@@ -64,6 +64,8 @@ pub async fn probe_media(path: impl AsRef<Path>) -> Result<MediaProbe> {
         .arg(
             "stream=codec_type,codec_name,width,height,sample_aspect_ratio,duration:stream_tags=rotate:stream_side_data=rotation,displaymatrix:stream_disposition=attached_pic,default:format=duration",
         )
+        .arg("-select_streams")
+        .arg("v")
         .arg("-of")
         .arg("json")
         // Restrict protocols so an untrusted file cannot trigger remote fetches.
@@ -91,7 +93,7 @@ pub async fn probe_media(path: impl AsRef<Path>) -> Result<MediaProbe> {
         .take()
         .ok_or_else(|| Error::InvalidMedia("无法读取 ffprobe 输出".to_owned()))?;
 
-    let probe_result = timeout(FFPROBE_TIMEOUT, async move {
+    let probe_result = timeout(FFPROBE_TIMEOUT, async {
         let mut json = Vec::new();
         stdout
             .take((MAX_PROBE_JSON_BYTES + 1) as u64)
@@ -112,7 +114,13 @@ pub async fn probe_media(path: impl AsRef<Path>) -> Result<MediaProbe> {
     .await;
 
     let (status, json) = match probe_result {
-        Err(_) => return Err(Error::InvalidMedia("ffprobe 执行超时".to_owned())),
+        Err(_) => {
+            // `kill_on_drop` is a last line of defence; explicitly reap the child
+            // here so repeated timeouts cannot accumulate zombie processes.
+            let _ = child.kill().await;
+            let _ = child.wait().await;
+            return Err(Error::InvalidMedia("ffprobe 执行超时".to_owned()));
+        }
         Ok(result) => result?,
     };
 
@@ -493,7 +501,7 @@ fn parse_video_codec(codec_name: Option<&str>) -> VideoCodec {
 
 fn parse_duration(value: Option<&Value>) -> Option<f64> {
     let duration = match value? {
-        Value::String(value) => value.parse::<f64>().ok()?,
+        Value::String(value) => value.trim().parse::<f64>().ok()?,
         Value::Number(value) => value.as_f64()?,
         _ => return None,
     };
@@ -701,6 +709,21 @@ mod tests {
         let probe = parse_probe_json(json).unwrap();
         assert_eq!(probe.codec, VideoCodec::Unknown);
         assert_eq!(probe.duration_seconds, None);
+    }
+
+    #[test]
+    fn trims_numeric_duration_strings() {
+        let json = br#"{
+            "streams": [{
+                "codec_type": "video",
+                "codec_name": "h264",
+                "width": 640,
+                "height": 360,
+                "duration": " 2.5 "
+            }]
+        }"#;
+
+        assert_eq!(parse_probe_json(json).unwrap().duration_seconds, Some(2.5));
     }
 
     #[test]

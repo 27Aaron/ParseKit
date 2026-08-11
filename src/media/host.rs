@@ -33,6 +33,7 @@ pub(crate) fn is_reviewed_https_url(url: &Url, rules: &[&str]) -> bool {
         && url.username().is_empty()
         && url.password().is_none()
         && url.fragment().is_none()
+        && url.port() != Some(0)
         && url.host_str().is_some_and(|host| {
             !host.ends_with('.') && host_matches_rules(host, rules.iter().copied())
         })
@@ -61,6 +62,7 @@ mod tests {
             "https://media.example/video.mp4#fragment",
             "https://media.example./video.mp4",
             "https://media.example.evil.test/video.mp4",
+            "https://media.example:0/video.mp4",
         ] {
             let url = Url::parse(raw).expect("test URL");
             assert!(!is_reviewed_https_url(&url, &rules), "{raw}");

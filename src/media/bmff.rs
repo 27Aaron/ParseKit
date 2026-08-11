@@ -50,13 +50,19 @@ pub fn looks_like_bmff(data: &[u8]) -> bool {
 
 /// Reads at most `max_bytes` from `path` and checks the prefix for BMFF boxes.
 pub async fn prefix_looks_like_bmff(path: &Path, max_bytes: usize) -> Result<bool> {
-    let mut file = OpenOptions::new().read(true).open(path).await?;
-    let length = file.metadata().await?.len().min(max_bytes as u64) as usize;
+    let file = OpenOptions::new().read(true).open(path).await?;
+    let max_bytes = u64::try_from(max_bytes).unwrap_or(u64::MAX);
+    let length = usize::try_from(file.metadata().await?.len().min(max_bytes))
+        .expect("length is bounded by max_bytes");
     if length < 8 {
         return Ok(false);
     }
-    let mut prefix = vec![0_u8; length];
-    file.read_exact(&mut prefix).await?;
+    let mut prefix = Vec::with_capacity(length);
+    // Read through a limit rather than relying on the earlier metadata length:
+    // the file may be concurrently truncated between metadata and I/O.
+    file.take(u64::try_from(length).expect("length fits u64"))
+        .read_to_end(&mut prefix)
+        .await?;
     Ok(looks_like_bmff(&prefix))
 }
 
@@ -77,5 +83,30 @@ mod tests {
         data[8..12].copy_from_slice(b"isom");
         assert!(looks_like_bmff(&data));
         assert!(!looks_like_bmff(b"not a media header!!!"));
+    }
+
+    #[test]
+    fn skips_well_formed_prefix_boxes() {
+        let mut data = Vec::new();
+        data.extend_from_slice(&8_u32.to_be_bytes());
+        data.extend_from_slice(b"free");
+        data.extend_from_slice(&16_u32.to_be_bytes());
+        data.extend_from_slice(b"ftyp");
+        data.extend_from_slice(b"isom\0\0\0\0");
+
+        assert!(looks_like_bmff(&data));
+    }
+
+    #[test]
+    fn rejects_invalid_box_sizes() {
+        let mut too_small = Vec::new();
+        too_small.extend_from_slice(&4_u32.to_be_bytes());
+        too_small.extend_from_slice(b"free");
+        assert!(!looks_like_bmff(&too_small));
+
+        let mut truncated_extended = Vec::new();
+        truncated_extended.extend_from_slice(&1_u32.to_be_bytes());
+        truncated_extended.extend_from_slice(b"free");
+        assert!(!looks_like_bmff(&truncated_extended));
     }
 }
