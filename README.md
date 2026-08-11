@@ -6,9 +6,9 @@
 
 ```bash
 nix develop
-cargo test --locked --all-targets
-cargo run --bin pk -- resolve "分享链接"
-cargo run --bin pk -- download "分享链接" -o ./downloads
+just check          # fmt + clippy + test（对齐 CI）
+just resolve '分享链接'
+just download '分享链接'
 ```
 
 微信视频号需要 `YUANBAO_COOKIE`（见 `.env.example`）。
