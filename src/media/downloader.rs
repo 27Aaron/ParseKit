@@ -106,24 +106,48 @@ struct DiskWriteBudget {
 }
 
 impl MediaDownloader {
-    /// Construct a downloader using the reviewed WeChat media CDN allowlist.
-    pub fn new(workspace_dir: impl Into<PathBuf>, max_bytes: u64) -> Result<Self> {
-        if max_bytes == 0 {
-            return Err(Error::Config("媒体下载大小上限必须大于零".to_owned()));
-        }
-
-        let allowed_hosts = REVIEWED_WECHAT_MEDIA_HOSTS
-            .iter()
-            .map(|host| (*host).to_owned())
-            .collect();
-
+    /// Construct a downloader with an **explicit** reviewed CDN host allowlist.
+    ///
+    /// Multi-platform apps should pass only the hosts needed for the media they
+    /// are about to fetch (typically the resolved post's platform). Never open
+    /// this set to arbitrary domains — redirects become an SSRF surface.
+    ///
+    /// Host comparison is case-insensitive. Empty lists and invalid names are
+    /// rejected at construction time.
+    pub fn with_allowed_hosts(
+        workspace_dir: impl Into<PathBuf>,
+        max_bytes: u64,
+        allowed_hosts: impl IntoIterator<Item = impl AsRef<str>>,
+    ) -> Result<Self> {
         Self::with_options(workspace_dir, max_bytes, allowed_hosts, REQUEST_TIMEOUT)
     }
 
+    /// Convenience constructor locked to the reviewed WeChat Channels CDN hosts
+    /// ([`REVIEWED_WECHAT_MEDIA_HOSTS`]).
+    pub fn for_wechat_channels(workspace_dir: impl Into<PathBuf>, max_bytes: u64) -> Result<Self> {
+        Self::with_allowed_hosts(
+            workspace_dir,
+            max_bytes,
+            REVIEWED_WECHAT_MEDIA_HOSTS.iter().copied(),
+        )
+    }
+
+    /// Backward-compatible alias for [`Self::for_wechat_channels`].
+    ///
+    /// Prefer [`Self::with_allowed_hosts`] or [`Self::for_wechat_channels`] so the
+    /// allowlist choice is explicit when more platforms land.
+    #[deprecated(
+        note = "use MediaDownloader::for_wechat_channels or with_allowed_hosts so the CDN allowlist is explicit"
+    )]
+    pub fn new(workspace_dir: impl Into<PathBuf>, max_bytes: u64) -> Result<Self> {
+        Self::for_wechat_channels(workspace_dir, max_bytes)
+    }
+
+    /// Full constructor: explicit allowlist plus request timeout.
     pub fn with_options(
         workspace_dir: impl Into<PathBuf>,
         max_bytes: u64,
-        allowed_hosts: HashSet<String>,
+        allowed_hosts: impl IntoIterator<Item = impl AsRef<str>>,
         request_timeout: Duration,
     ) -> Result<Self> {
         if max_bytes == 0 {
@@ -132,13 +156,7 @@ impl MediaDownloader {
         if request_timeout.is_zero() {
             return Err(Error::Config("媒体下载超时必须大于零".to_owned()));
         }
-        let allowed_hosts = allowed_hosts
-            .into_iter()
-            .map(|host| host.to_ascii_lowercase())
-            .collect::<HashSet<_>>();
-        if allowed_hosts.is_empty() || allowed_hosts.iter().any(|host| !valid_host_name(host)) {
-            return Err(Error::Config("媒体主机允许列表无效".to_owned()));
-        }
+        let allowed_hosts = normalize_allowed_hosts(allowed_hosts)?;
 
         Ok(Self {
             workspace_dir: Arc::new(workspace_dir.into()),
@@ -147,6 +165,11 @@ impl MediaDownloader {
             request_timeout,
             disk_write_budget: Arc::new(StdMutex::new(DiskWriteBudget::default())),
         })
+    }
+
+    /// Reviewed hosts this downloader will accept (lowercase).
+    pub fn allowed_hosts(&self) -> &HashSet<String> {
+        self.allowed_hosts.as_ref()
     }
 
     /// Return a downloader that shares this instance's storage and network
@@ -880,6 +903,20 @@ fn valid_host_name(host: &str) -> bool {
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-'))
 }
 
+fn normalize_allowed_hosts(
+    hosts: impl IntoIterator<Item = impl AsRef<str>>,
+) -> Result<HashSet<String>> {
+    let allowed_hosts = hosts
+        .into_iter()
+        .map(|host| host.as_ref().trim().to_ascii_lowercase())
+        .filter(|host| !host.is_empty())
+        .collect::<HashSet<_>>();
+    if allowed_hosts.is_empty() || allowed_hosts.iter().any(|host| !valid_host_name(host)) {
+        return Err(Error::Config("媒体主机允许列表无效".to_owned()));
+    }
+    Ok(allowed_hosts)
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::{Mutex, atomic::AtomicUsize};
@@ -887,10 +924,49 @@ mod tests {
     use super::*;
 
     fn allowed_hosts() -> HashSet<String> {
-        REVIEWED_WECHAT_MEDIA_HOSTS
-            .iter()
-            .map(|host| (*host).to_owned())
-            .collect()
+        normalize_allowed_hosts(REVIEWED_WECHAT_MEDIA_HOSTS.iter().copied()).unwrap()
+    }
+
+    #[test]
+    fn with_allowed_hosts_normalizes_and_exposes_the_set() {
+        let downloader =
+            MediaDownloader::with_allowed_hosts("media", 1_024, ["Example.COM", "cdn.example.org"])
+                .unwrap();
+
+        assert!(downloader.allowed_hosts().contains("example.com"));
+        assert!(downloader.allowed_hosts().contains("cdn.example.org"));
+        assert_eq!(downloader.allowed_hosts().len(), 2);
+    }
+
+    #[test]
+    fn with_allowed_hosts_rejects_empty_or_invalid_entries() {
+        assert!(matches!(
+            MediaDownloader::with_allowed_hosts("media", 1_024, std::iter::empty::<&str>()),
+            Err(Error::Config(_))
+        ));
+        assert!(matches!(
+            MediaDownloader::with_allowed_hosts("media", 1_024, [".bad", "ok.example"]),
+            Err(Error::Config(_))
+        ));
+        assert!(matches!(
+            MediaDownloader::with_allowed_hosts("media", 1_024, ["has space.example"]),
+            Err(Error::Config(_))
+        ));
+    }
+
+    #[test]
+    fn for_wechat_channels_uses_the_reviewed_host_set() {
+        let downloader = MediaDownloader::for_wechat_channels("media", 1_024).unwrap();
+        for host in REVIEWED_WECHAT_MEDIA_HOSTS {
+            assert!(
+                downloader.allowed_hosts().contains(*host),
+                "missing reviewed host {host}"
+            );
+        }
+        assert_eq!(
+            downloader.allowed_hosts().len(),
+            REVIEWED_WECHAT_MEDIA_HOSTS.len()
+        );
     }
 
     #[tokio::test]
