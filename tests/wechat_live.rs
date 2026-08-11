@@ -2,8 +2,8 @@ use std::{env, path::PathBuf, time::Duration};
 
 use parse_core::{
     media::{DownloadRequestIdentity, MediaDownloader, decrypt_file_prefix, probe_media},
-    model::{MediaSource, MediaSourceKind, REVIEWED_WECHAT_MEDIA_HOSTS, ResolvedPost},
-    wechat::WechatResolver,
+    model::{MediaSource, MediaSourceKind, ResolvedPost},
+    wechat::{REVIEWED_WECHAT_MEDIA_HOSTS, WechatResolver},
 };
 use uuid::Uuid;
 

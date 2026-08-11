@@ -21,8 +21,12 @@ use url::Url;
 
 use crate::{
     Error, Result,
+    media::DownloadRequestIdentity,
     model::{MediaSource, MediaSourceKind, ResolvedPost, VideoCodec},
-    platforms::PlatformResolver,
+    platforms::{
+        PlatformResolver,
+        util::{map_network_error, read_body_limited, trim_url_candidate},
+    },
 };
 
 const RESOLVE_TIMEOUT: Duration = Duration::from_secs(30);
@@ -31,6 +35,35 @@ const MAX_SHORTLINK_REDIRECTS: usize = 8;
 const MAX_HTML_BYTES: usize = 2 * 1024 * 1024;
 const MOBILE_UA: &str = "Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) \
     AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1";
+const MEDIA_USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 \
+     (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36";
+const DOUYIN_ORIGIN: &str = "https://www.douyin.com";
+const DOUYIN_REFERER: &str = "https://www.douyin.com/";
+
+/// Reviewed Douyin media hosts / host-suffixes for download allowlisting.
+///
+/// Entries that start with `.` are **suffix rules** (e.g. `.douyinvod.com` matches
+/// `v3-web.douyinvod.com` but not `douyinvod.com` itself). Exact hostnames match
+/// only themselves. Review new CDN families before adding them.
+pub const REVIEWED_MEDIA_HOSTS: &[&str] = &[
+    // Play API / redirect front doors
+    "aweme.snssdk.com",
+    "www.douyin.com",
+    "www.iesdouyin.com",
+    // Common ByteDance video CDN suffix families
+    ".douyinvod.com",
+    ".douyincdn.com",
+    ".bytevcloudcdn.com",
+    ".bytecdn.cn",
+    ".bytecdn.com",
+    ".zjcdn.com",
+    ".douyinpic.com",
+    ".ibyteimg.com",
+    ".pstatp.com",
+];
+
+/// Backward-compatible alias used by older call sites and docs.
+pub const REVIEWED_DOUYIN_MEDIA_HOSTS: &[&str] = REVIEWED_MEDIA_HOSTS;
 
 /// Hosts we may follow while expanding short share links.
 const REDIRECT_HOSTS: &[&str] = &[
@@ -40,6 +73,19 @@ const REDIRECT_HOSTS: &[&str] = &[
     "www.iesdouyin.com",
     "iesdouyin.com",
 ];
+
+/// Origin / Referer / User-Agent for Douyin media CDN requests.
+pub fn download_identity() -> DownloadRequestIdentity {
+    DownloadRequestIdentity {
+        origin: Some(DOUYIN_ORIGIN.to_owned()),
+        referer: Some(DOUYIN_REFERER.to_owned()),
+        user_agent: Some(MEDIA_USER_AGENT.to_owned()),
+    }
+}
+
+fn map_douyin_network_error(error: &reqwest::Error) -> Error {
+    map_network_error(error, "抖音请求超时", "抖音网络请求失败")
+}
 
 #[derive(Clone)]
 pub struct DouyinResolver {
@@ -110,7 +156,7 @@ impl DouyinResolver {
                 .header(ACCEPT_LANGUAGE, "zh-CN,zh;q=0.9,en;q=0.8")
                 .send()
                 .await
-                .map_err(|error| Error::Network(format!("抖音短链请求失败: {error}")))?;
+                .map_err(|error| map_douyin_network_error(&error))?;
 
             if !response.status().is_redirection() {
                 // Some short links return 200 with a final URL already set.
@@ -146,7 +192,7 @@ impl DouyinResolver {
             .header(ACCEPT_LANGUAGE, "zh-CN,zh;q=0.9,en;q=0.8")
             .send()
             .await
-            .map_err(|error| Error::Network(format!("抖音分享页请求失败: {error}")))?;
+            .map_err(|error| map_douyin_network_error(&error))?;
 
         let status = response.status();
         if status == StatusCode::TOO_MANY_REQUESTS {
@@ -162,14 +208,8 @@ impl DouyinResolver {
             )));
         }
 
-        let bytes = response
-            .bytes()
-            .await
-            .map_err(|error| Error::Network(format!("读取抖音分享页失败: {error}")))?;
-        if bytes.len() > MAX_HTML_BYTES {
-            return Err(Error::UpstreamChanged);
-        }
-        String::from_utf8(bytes.to_vec()).map_err(|_| Error::UpstreamChanged)
+        let bytes = read_body_limited(response, MAX_HTML_BYTES, map_douyin_network_error).await?;
+        String::from_utf8(bytes).map_err(|_| Error::UpstreamChanged)
     }
 }
 
@@ -202,9 +242,7 @@ pub fn extract_share_url(input: &str) -> Result<Url> {
     });
 
     for matched in pattern.find_iter(input) {
-        let candidate = matched.as_str().trim_end_matches([
-            '。', '，', ',', '.', '！', '!', '？', '?', ')', '）', ']', '】', '、',
-        ]);
+        let candidate = trim_url_candidate(matched.as_str());
         let Ok(mut url) = Url::parse(candidate) else {
             continue;
         };

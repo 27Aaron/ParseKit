@@ -27,7 +27,8 @@ use uuid::Uuid;
 
 use crate::{
     error::{Error, Result},
-    model::{MediaSource, REVIEWED_DOUYIN_MEDIA_HOSTS, REVIEWED_WECHAT_MEDIA_HOSTS},
+    model::MediaSource,
+    platforms,
 };
 
 const MAX_REDIRECTS: usize = 5;
@@ -37,18 +38,15 @@ const DOWNLOAD_IDLE_TIMEOUT: Duration = Duration::from_secs(60);
 const DNS_TIMEOUT: Duration = Duration::from_secs(5);
 const MIN_FREE_DISK_BYTES: u64 = 512 * 1024 * 1024;
 const DISK_CHECK_INTERVAL_BYTES: u64 = 16 * 1024 * 1024;
-const CHANNELS_ORIGIN: &str = "https://channels.weixin.qq.com";
-const CHANNELS_REFERER: &str = "https://channels.weixin.qq.com/";
-const DOUYIN_ORIGIN: &str = "https://www.douyin.com";
-const DOUYIN_REFERER: &str = "https://www.douyin.com/";
-const MEDIA_USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 \
+const DEFAULT_MEDIA_USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 \
      (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36";
 const PROGRESS_THRESHOLDS: [u8; 5] = [20, 40, 60, 80, 100];
 const DOWNLOAD_RETRY_DELAYS: [Duration; 2] = [Duration::from_secs(1), Duration::from_secs(2)];
 
 /// Optional Origin / Referer / User-Agent applied to media HTTP requests.
 ///
-/// Platforms often require a matching Referer (WeChat CDN vs Douyin CDN).
+/// Prefer platform helpers (`platforms::wechat::download_identity`,
+/// `platforms::douyin::download_identity`) over hand-rolled values.
 #[derive(Clone, Debug, Default)]
 pub struct DownloadRequestIdentity {
     pub origin: Option<String>,
@@ -57,20 +55,14 @@ pub struct DownloadRequestIdentity {
 }
 
 impl DownloadRequestIdentity {
+    /// WeChat Channels CDN identity (delegates to the WeChat platform module).
     pub fn wechat_channels() -> Self {
-        Self {
-            origin: Some(CHANNELS_ORIGIN.to_owned()),
-            referer: Some(CHANNELS_REFERER.to_owned()),
-            user_agent: Some(MEDIA_USER_AGENT.to_owned()),
-        }
+        platforms::wechat::download_identity()
     }
 
+    /// Douyin CDN identity (delegates to the Douyin platform module).
     pub fn douyin() -> Self {
-        Self {
-            origin: Some(DOUYIN_ORIGIN.to_owned()),
-            referer: Some(DOUYIN_REFERER.to_owned()),
-            user_agent: Some(MEDIA_USER_AGENT.to_owned()),
-        }
+        platforms::douyin::download_identity()
     }
 }
 
@@ -159,26 +151,29 @@ impl MediaDownloader {
         )
     }
 
-    /// Convenience constructor locked to the reviewed WeChat Channels CDN hosts
-    /// ([`REVIEWED_WECHAT_MEDIA_HOSTS`]).
+    /// Convenience constructor locked to reviewed WeChat Channels CDN hosts.
+    ///
+    /// Host list and request identity come from [`platforms::wechat`].
     pub fn for_wechat_channels(workspace_dir: impl Into<PathBuf>, max_bytes: u64) -> Result<Self> {
         Self::with_options(
             workspace_dir,
             max_bytes,
-            REVIEWED_WECHAT_MEDIA_HOSTS.iter().copied(),
+            platforms::wechat::REVIEWED_MEDIA_HOSTS.iter().copied(),
             REQUEST_TIMEOUT,
-            DownloadRequestIdentity::wechat_channels(),
+            platforms::wechat::download_identity(),
         )
     }
 
     /// Convenience constructor for reviewed Douyin media hosts / suffixes.
+    ///
+    /// Host list and request identity come from [`platforms::douyin`].
     pub fn for_douyin(workspace_dir: impl Into<PathBuf>, max_bytes: u64) -> Result<Self> {
         Self::with_options(
             workspace_dir,
             max_bytes,
-            REVIEWED_DOUYIN_MEDIA_HOSTS.iter().copied(),
+            platforms::douyin::REVIEWED_MEDIA_HOSTS.iter().copied(),
             REQUEST_TIMEOUT,
-            DownloadRequestIdentity::douyin(),
+            platforms::douyin::download_identity(),
         )
     }
 
@@ -389,7 +384,7 @@ impl MediaDownloader {
             .request_identity
             .user_agent
             .as_deref()
-            .unwrap_or(MEDIA_USER_AGENT);
+            .unwrap_or(DEFAULT_MEDIA_USER_AGENT);
         request = request.header(USER_AGENT, user_agent);
         request.send().await.map_err(map_reqwest_download_error)
     }
@@ -1009,7 +1004,7 @@ mod tests {
     use super::*;
 
     fn allowed_hosts() -> HashSet<String> {
-        normalize_allowed_hosts(REVIEWED_WECHAT_MEDIA_HOSTS.iter().copied()).unwrap()
+        normalize_allowed_hosts(platforms::wechat::REVIEWED_MEDIA_HOSTS.iter().copied()).unwrap()
     }
 
     #[test]
@@ -1042,7 +1037,7 @@ mod tests {
     #[test]
     fn for_wechat_channels_uses_the_reviewed_host_set() {
         let downloader = MediaDownloader::for_wechat_channels("media", 1_024).unwrap();
-        for host in REVIEWED_WECHAT_MEDIA_HOSTS {
+        for host in platforms::wechat::REVIEWED_MEDIA_HOSTS {
             assert!(
                 downloader.allowed_hosts().contains(*host),
                 "missing reviewed host {host}"
@@ -1050,7 +1045,7 @@ mod tests {
         }
         assert_eq!(
             downloader.allowed_hosts().len(),
-            REVIEWED_WECHAT_MEDIA_HOSTS.len()
+            platforms::wechat::REVIEWED_MEDIA_HOSTS.len()
         );
     }
 
@@ -1080,7 +1075,7 @@ mod tests {
     #[test]
     fn for_douyin_uses_reviewed_host_set() {
         let downloader = MediaDownloader::for_douyin("media", 1_024).unwrap();
-        for host in REVIEWED_DOUYIN_MEDIA_HOSTS {
+        for host in platforms::douyin::REVIEWED_MEDIA_HOSTS {
             assert!(
                 downloader.allowed_hosts().contains(*host),
                 "missing reviewed host {host}"

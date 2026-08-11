@@ -3,41 +3,6 @@ use std::fmt;
 use serde::{Deserialize, Serialize};
 use url::Url;
 
-/// Reviewed WeChat Channels CDN hosts allowed for media download.
-///
-/// Pass these (or a platform-specific reviewed set) into
-/// [`crate::media::MediaDownloader::with_allowed_hosts`]. New CDN names must be
-/// reviewed before being added — broad suffixes like `*.qq.com` are intentionally
-/// not accepted.
-pub const REVIEWED_WECHAT_MEDIA_HOSTS: &[&str] = &[
-    "finder.video.qq.com",
-    "findermp.video.qq.com",
-    "finder.video.wechat.com",
-    "findermp.video.wechat.com",
-];
-
-/// Reviewed Douyin media hosts / host-suffixes for download allowlisting.
-///
-/// Entries that start with `.` are **suffix rules** (e.g. `.douyinvod.com` matches
-/// `v3-web.douyinvod.com` but not `douyinvod.com` itself). Exact hostnames match
-/// only themselves. Review new CDN families before adding them.
-pub const REVIEWED_DOUYIN_MEDIA_HOSTS: &[&str] = &[
-    // Play API / redirect front doors
-    "aweme.snssdk.com",
-    "www.douyin.com",
-    "www.iesdouyin.com",
-    // Common ByteDance video CDN suffix families
-    ".douyinvod.com",
-    ".douyincdn.com",
-    ".bytevcloudcdn.com",
-    ".bytecdn.cn",
-    ".bytecdn.com",
-    ".zjcdn.com",
-    ".douyinpic.com",
-    ".ibyteimg.com",
-    ".pstatp.com",
-];
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum VideoCodec {
@@ -115,22 +80,23 @@ impl ResolvedPost {
         std::iter::once(&self.video).chain(self.fallback_videos.iter())
     }
 
+    /// Short title for display using a platform-agnostic fallback (`"视频"`).
+    ///
+    /// For platform-specific defaults (e.g. `"微信视频号视频"`), use
+    /// [`crate::platforms::util::display_title_for_post`].
     pub fn display_title(&self) -> String {
+        self.display_title_or("视频")
+    }
+
+    /// Short title for display with a caller-supplied fallback.
+    pub fn display_title_or(&self, fallback: &str) -> String {
         self.title
             .as_deref()
-            .filter(|value| !value.trim().is_empty())
-            .unwrap_or(default_title_for_platform(&self.platform))
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .unwrap_or(fallback)
             .chars()
             .take(180)
             .collect()
-    }
-}
-
-fn default_title_for_platform(platform: &str) -> &'static str {
-    match platform {
-        "wechat_channels" => "微信视频号视频",
-        "douyin" => "抖音视频",
-        // Future platforms can add their own fallback titles here.
-        _ => "视频",
     }
 }
