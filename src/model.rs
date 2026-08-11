@@ -5,6 +5,50 @@ use url::Url;
 
 use crate::{Error, Result};
 
+/// Stable platform identifier (serde uses the public string tags).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum PlatformId {
+    #[serde(rename = "wechat_channels")]
+    WechatChannels,
+    #[serde(rename = "douyin")]
+    Douyin,
+    #[serde(rename = "bilibili")]
+    Bilibili,
+}
+
+impl PlatformId {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::WechatChannels => "wechat_channels",
+            Self::Douyin => "douyin",
+            Self::Bilibili => "bilibili",
+        }
+    }
+
+    pub const fn display_name(self) -> &'static str {
+        match self {
+            Self::WechatChannels => "微信视频号",
+            Self::Douyin => "抖音",
+            Self::Bilibili => "哔哩哔哩",
+        }
+    }
+
+    pub fn parse(raw: &str) -> Option<Self> {
+        match raw {
+            "wechat_channels" => Some(Self::WechatChannels),
+            "douyin" => Some(Self::Douyin),
+            "bilibili" => Some(Self::Bilibili),
+            _ => None,
+        }
+    }
+}
+
+impl fmt::Display for PlatformId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum VideoCodec {
@@ -115,10 +159,10 @@ impl fmt::Debug for MediaSource {
     }
 }
 
-/// Resolved post. Prefer [`Self::new_video`] so `kind` and `media` stay consistent.
+/// Resolved post. Prefer [`Self::new_video`] / [`Self::new_image_set`] so `kind` and `media` stay consistent.
 #[derive(Clone)]
 pub struct ResolvedPost {
-    pub platform: String,
+    pub platform: PlatformId,
     pub post_id: String,
     pub canonical_url: Url,
     pub title: Option<String>,
@@ -145,7 +189,7 @@ impl fmt::Debug for ResolvedPost {
 
 impl ResolvedPost {
     pub fn new_video(
-        platform: impl Into<String>,
+        platform: PlatformId,
         post_id: impl Into<String>,
         canonical_url: Url,
         title: Option<String>,
@@ -154,7 +198,7 @@ impl ResolvedPost {
         fallback_videos: Vec<MediaSource>,
     ) -> Self {
         Self {
-            platform: platform.into(),
+            platform,
             post_id: post_id.into(),
             canonical_url,
             title,
@@ -165,6 +209,31 @@ impl ResolvedPost {
                 fallbacks: fallback_videos,
             }],
         }
+    }
+
+    pub fn new_image_set(
+        platform: PlatformId,
+        post_id: impl Into<String>,
+        canonical_url: Url,
+        title: Option<String>,
+        cover_url: Option<Url>,
+        images: Vec<MediaSource>,
+    ) -> Result<Self> {
+        if images.is_empty() {
+            return Err(Error::MediaUnavailable);
+        }
+        Ok(Self {
+            platform,
+            post_id: post_id.into(),
+            canonical_url,
+            title,
+            cover_url,
+            kind: ContentKind::ImageSet,
+            media: images
+                .into_iter()
+                .map(|source| MediaItem::Image { source })
+                .collect(),
+        })
     }
 
     /// All media sources in play order (primary video first, then fallbacks / other items).
@@ -227,7 +296,7 @@ mod tests {
         let primary = sample_source("a.mp4");
         let fallback = sample_source("b.mp4");
         let post = ResolvedPost::new_video(
-            "douyin",
+            PlatformId::Douyin,
             "1",
             Url::parse("https://www.douyin.com/video/1").unwrap(),
             Some("t".into()),

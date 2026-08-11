@@ -17,7 +17,7 @@ async fn resolves_wechat_channels_sample() {
     let post = resolve_sample().await;
 
     assert!(
-        post.platform == "wechat_channels",
+        post.platform == parse_kit::PlatformId::WechatChannels,
         "unexpected platform identifier"
     );
     assert!(

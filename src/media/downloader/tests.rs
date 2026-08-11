@@ -105,14 +105,12 @@ fn for_douyin_uses_reviewed_host_set() {
 
 #[test]
 fn for_platform_maps_known_ids() {
-    let wechat = MediaDownloader::for_platform("wechat_channels", "media", 1_024).unwrap();
+    let wechat =
+        MediaDownloader::for_platform(crate::PlatformId::WechatChannels, "media", 1_024).unwrap();
     assert!(wechat.allowed_hosts().contains("finder.video.qq.com"));
-    let douyin = MediaDownloader::for_platform("douyin", "media", 1_024).unwrap();
+    let douyin = MediaDownloader::for_platform(crate::PlatformId::Douyin, "media", 1_024).unwrap();
     assert!(douyin.allowed_hosts().contains("aweme.snssdk.com"));
-    assert!(matches!(
-        MediaDownloader::for_platform("unknown", "media", 1_024),
-        Err(Error::Config(_))
-    ));
+    let _ = MediaDownloader::for_platform(crate::PlatformId::Bilibili, "media", 1_024).unwrap();
 }
 
 #[tokio::test]
@@ -427,6 +425,7 @@ fn reports_each_crossed_threshold_once_after_writes() {
         reporter,
         disk_write_budget,
         None,
+        0,
     )
     .unwrap();
     assert_eq!(

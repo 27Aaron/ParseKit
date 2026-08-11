@@ -76,6 +76,23 @@ pub(super) async fn create_private_file(path: PathBuf) -> Result<PendingFile> {
     .map_err(|_| Error::Storage(storage_path))
 }
 
+pub(super) async fn open_private_file_append(path: PathBuf) -> Result<PendingFile> {
+    let storage_path = path.clone();
+    tokio::task::spawn_blocking(move || {
+        let mut options = OpenOptions::new();
+        options.write(true).append(true).create(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        options.open(&path).map(|file| PendingFile::new(path, file))
+    })
+    .await
+    .map_err(|_| Error::Storage(storage_path.clone()))?
+    .map_err(|_| Error::Storage(storage_path))
+}
+
 pub(super) fn write_chunks<T: AsRef<[u8]>>(
     mut pending_file: PendingFile,
     receiver: &mut mpsc::Receiver<T>,
@@ -83,8 +100,9 @@ pub(super) fn write_chunks<T: AsRef<[u8]>>(
     mut progress_reporter: Option<ProgressReporter>,
     disk_write_budget: Arc<StdMutex<DiskWriteBudget>>,
     mut prefix_xor: Option<crate::platforms::wechat::PrefixXor>,
+    initial_bytes: u64,
 ) -> Result<WrittenMedia> {
-    let mut bytes = 0_u64;
+    let mut bytes = initial_bytes;
     let mut checked_disk_space = false;
 
     while let Some(chunk) = receiver.blocking_recv() {

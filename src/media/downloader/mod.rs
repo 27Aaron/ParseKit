@@ -20,6 +20,7 @@ use reqwest::{
     header::{ACCEPT, ACCEPT_ENCODING, ORIGIN, REFERER, USER_AGENT},
 };
 use tokio::time::timeout;
+use tracing::Instrument;
 use url::Url;
 
 use crate::{
@@ -34,7 +35,9 @@ use self::http::{
 };
 use self::progress::ProgressReporter;
 use self::ssrf::{normalize_allowed_hosts, resolve_public_addresses, validate_media_url};
-use self::write::{WrittenMedia, create_private_file, random_task_path, write_chunks};
+use self::write::{
+    WrittenMedia, create_private_file, open_private_file_append, random_task_path, write_chunks,
+};
 
 const MAX_REDIRECTS: usize = 5;
 pub(super) const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
@@ -60,6 +63,10 @@ impl DownloadRequestIdentity {
 
     pub fn douyin() -> Self {
         platforms::douyin::download_identity()
+    }
+
+    pub fn bilibili() -> Self {
+        platforms::bilibili::download_identity()
     }
 }
 
@@ -149,17 +156,27 @@ impl MediaDownloader {
         )
     }
 
+    pub fn for_bilibili(workspace_dir: impl Into<PathBuf>, max_bytes: u64) -> Result<Self> {
+        Self::with_options(
+            workspace_dir,
+            max_bytes,
+            platforms::bilibili::REVIEWED_MEDIA_HOSTS.iter().copied(),
+            REQUEST_TIMEOUT,
+            platforms::bilibili::download_identity(),
+        )
+    }
+
     pub fn for_platform(
-        platform_id: &str,
+        platform_id: crate::PlatformId,
         workspace_dir: impl Into<PathBuf>,
         max_bytes: u64,
     ) -> Result<Self> {
         match platform_id {
-            "wechat_channels" => Self::for_wechat_channels(workspace_dir, max_bytes),
-            "douyin" => Self::for_douyin(workspace_dir, max_bytes),
-            other => Err(Error::Config(format!(
-                "未知平台，无法选择媒体下载 allowlist: {other}"
-            ))),
+            crate::PlatformId::WechatChannels => {
+                Self::for_wechat_channels(workspace_dir, max_bytes)
+            }
+            crate::PlatformId::Douyin => Self::for_douyin(workspace_dir, max_bytes),
+            crate::PlatformId::Bilibili => Self::for_bilibili(workspace_dir, max_bytes),
         }
     }
 
@@ -232,35 +249,52 @@ impl MediaDownloader {
     where
         I: IntoIterator<Item = &'a MediaSource>,
     {
-        let mut last_error = None;
-        for source in sources {
-            match self
-                .download_url_with_callback(&source.url, source.size_hint, None, source.decode_key)
-                .await
-            {
-                Ok(media) => {
-                    if source.decode_key.is_some() {
-                        match crate::media::file_prefix_looks_like_bmff(&media.path).await {
-                            Ok(true) => return Ok(media),
-                            Ok(false) => {
-                                let _ = media.cleanup().await;
-                                last_error = Some(Error::InvalidMedia(
-                                    "decodeKey 与媒体不匹配，解密后没有有效 BMFF 文件头".into(),
-                                ));
+        let span = tracing::info_span!("media.download_playable");
+        async move {
+            let mut last_error = None;
+            for source in sources {
+                let host = source.url.host_str().unwrap_or("-");
+                let attempt = tracing::info_span!(
+                    "media.download_source",
+                    host,
+                    has_decode_key = source.decode_key.is_some()
+                );
+                match self
+                    .download_url_with_callback(
+                        &source.url,
+                        source.size_hint,
+                        None,
+                        source.decode_key,
+                    )
+                    .instrument(attempt)
+                    .await
+                {
+                    Ok(media) => {
+                        if source.decode_key.is_some() {
+                            match crate::media::file_prefix_looks_like_bmff(&media.path).await {
+                                Ok(true) => return Ok(media),
+                                Ok(false) => {
+                                    let _ = media.cleanup().await;
+                                    last_error = Some(Error::InvalidMedia(
+                                        "decodeKey 与媒体不匹配，解密后没有有效 BMFF 文件头".into(),
+                                    ));
+                                }
+                                Err(error) => {
+                                    let _ = media.cleanup().await;
+                                    last_error = Some(error);
+                                }
                             }
-                            Err(error) => {
-                                let _ = media.cleanup().await;
-                                last_error = Some(error);
-                            }
+                        } else {
+                            return Ok(media);
                         }
-                    } else {
-                        return Ok(media);
                     }
+                    Err(error) => last_error = Some(error),
                 }
-                Err(error) => last_error = Some(error),
             }
+            Err(last_error.unwrap_or(Error::MediaUnavailable))
         }
-        Err(last_error.unwrap_or(Error::MediaUnavailable))
+        .instrument(span)
+        .await
     }
 
     /// Progress callback: quick, sync; thresholds 20/40/60/80/100 when length known.
@@ -288,22 +322,54 @@ impl MediaDownloader {
         progress_callback: Option<ProgressCallback>,
         decode_key: Option<u64>,
     ) -> Result<DownloadedMedia> {
-        timeout(
+        // Stable path so transient retries can resume with HTTP Range when there is
+        // no decode_key (XOR prefix streams must restart from byte 0).
+        tokio::fs::create_dir_all(self.workspace_dir.as_path())
+            .await
+            .map_err(|_| Error::Storage(self.workspace_dir.as_ref().clone()))?;
+        let path = random_task_path(self.workspace_dir.as_path());
+        let path = Arc::new(path);
+        let allow_resume = decode_key.is_none();
+
+        let result = timeout(
             self.request_timeout,
             retry_transient_downloads(
                 || {
-                    self.download_url_within_deadline(
-                        url,
-                        size_hint,
-                        progress_callback.clone(),
-                        decode_key,
-                    )
+                    let path = Arc::clone(&path);
+                    let progress_callback = progress_callback.clone();
+                    async move {
+                        let resume_from = if allow_resume {
+                            tokio::fs::metadata(path.as_path())
+                                .await
+                                .map(|meta| meta.len())
+                                .unwrap_or(0)
+                        } else {
+                            if path.exists() {
+                                let _ = tokio::fs::remove_file(path.as_path()).await;
+                            }
+                            0
+                        };
+                        self.download_url_within_deadline(
+                            url,
+                            size_hint,
+                            progress_callback,
+                            decode_key,
+                            path.as_path().to_path_buf(),
+                            resume_from,
+                        )
+                        .await
+                    }
                 },
                 &DOWNLOAD_RETRY_DELAYS,
             ),
         )
         .await
-        .map_err(|_| Error::Download("媒体下载总超时".to_owned()))?
+        .map_err(|_| Error::Download("媒体下载总超时".to_owned()))?;
+
+        if result.is_err() {
+            let _ = tokio::fs::remove_file(path.as_path()).await;
+        }
+        result
     }
 
     async fn download_url_within_deadline(
@@ -312,6 +378,8 @@ impl MediaDownloader {
         size_hint: Option<u64>,
         progress_callback: Option<ProgressCallback>,
         decode_key: Option<u64>,
+        path: PathBuf,
+        mut resume_from: u64,
     ) -> Result<DownloadedMedia> {
         if let Some(actual) = size_hint.filter(|size| *size > self.max_bytes) {
             return Err(Error::MediaTooLarge {
@@ -320,23 +388,57 @@ impl MediaDownloader {
             });
         }
 
-        let response = self.follow_redirects(url.clone()).await?;
-        check_response_status(response.status())?;
-        reject_encoded_response(&response)?;
+        // At most one restart if the server ignores Range and returns 200.
+        for _ in 0..2 {
+            if resume_from > self.max_bytes {
+                return Err(Error::MediaTooLarge {
+                    actual: resume_from,
+                    limit: self.max_bytes,
+                });
+            }
 
-        let content_length = checked_content_length(&response)?;
-        if let Some(actual) = content_length.filter(|actual| *actual > self.max_bytes) {
-            return Err(Error::MediaTooLarge {
-                actual,
-                limit: self.max_bytes,
-            });
+            let response = self.follow_redirects(url.clone(), resume_from).await?;
+            let status = response.status();
+            if resume_from > 0 && status == reqwest::StatusCode::OK {
+                // Server ignored Range — restart from zero once.
+                let _ = tokio::fs::remove_file(&path).await;
+                resume_from = 0;
+                continue;
+            }
+            // 206 Partial Content is success when resuming; otherwise require 200.
+            if !(resume_from > 0 && status == reqwest::StatusCode::PARTIAL_CONTENT) {
+                check_response_status(status)?;
+            }
+            reject_encoded_response(&response)?;
+
+            let content_length = checked_content_length(&response)?;
+            let total_hint = if resume_from > 0 {
+                content_length.map(|len| len.saturating_add(resume_from))
+            } else {
+                content_length
+            };
+            if let Some(actual) = total_hint.filter(|actual| *actual > self.max_bytes) {
+                return Err(Error::MediaTooLarge {
+                    actual,
+                    limit: self.max_bytes,
+                });
+            }
+
+            return self
+                .stream_response(
+                    response,
+                    total_hint,
+                    progress_callback,
+                    decode_key,
+                    path,
+                    resume_from,
+                )
+                .await;
         }
-
-        self.stream_response(response, content_length, progress_callback, decode_key)
-            .await
+        Err(Error::Download("媒体下载重试逻辑失败".into()))
     }
 
-    async fn follow_redirects(&self, initial_url: Url) -> Result<Response> {
+    async fn follow_redirects(&self, initial_url: Url, resume_from: u64) -> Result<Response> {
         let mut current = initial_url;
         let mut pinned_clients = HashMap::<String, Client>::new();
 
@@ -351,7 +453,9 @@ impl MediaDownloader {
                 .get(&host)
                 .ok_or_else(|| Error::Download("媒体 HTTP 客户端初始化失败".to_owned()))?;
 
-            let response = self.request_with_client(client, &current).await?;
+            let response = self
+                .request_with_client(client, &current, resume_from)
+                .await?;
 
             if !response.status().is_redirection() {
                 return Ok(response);
@@ -376,11 +480,19 @@ impl MediaDownloader {
         Err(Error::Download("媒体重定向次数过多".to_owned()))
     }
 
-    async fn request_with_client(&self, client: &Client, url: &Url) -> Result<Response> {
+    async fn request_with_client(
+        &self,
+        client: &Client,
+        url: &Url,
+        resume_from: u64,
+    ) -> Result<Response> {
         let mut request = client
             .get(url.clone())
             .header(ACCEPT, "*/*")
             .header(ACCEPT_ENCODING, "identity");
+        if resume_from > 0 {
+            request = request.header(reqwest::header::RANGE, format!("bytes={resume_from}-"));
+        }
         if let Some(origin) = self.request_identity.origin.as_deref() {
             request = request.header(ORIGIN, origin);
         }
@@ -402,18 +514,27 @@ impl MediaDownloader {
         content_length: Option<u64>,
         progress_callback: Option<ProgressCallback>,
         decode_key: Option<u64>,
+        path: PathBuf,
+        resume_from: u64,
     ) -> Result<DownloadedMedia> {
-        tokio::fs::create_dir_all(self.workspace_dir.as_path())
-            .await
-            .map_err(|_| Error::Storage(self.workspace_dir.as_ref().clone()))?;
-        let path = random_task_path(self.workspace_dir.as_path());
-        let pending_file = create_private_file(path.clone()).await?;
+        let pending_file = if resume_from > 0 && path.exists() {
+            open_private_file_append(path.clone()).await?
+        } else {
+            let _ = tokio::fs::remove_file(&path).await;
+            create_private_file(path.clone()).await?
+        };
         let (sender, mut receiver) = tokio::sync::mpsc::channel(4);
         let writer_limit = self.max_bytes;
         let disk_write_budget = Arc::clone(&self.disk_write_budget);
         let (progress_reporter, _progress_guard) =
             ProgressReporter::new(content_length, progress_callback);
-        let prefix_xor = decode_key.map(crate::platforms::wechat::PrefixXor::new);
+        // Only XOR from the start of a fresh download.
+        let prefix_xor = if resume_from == 0 {
+            decode_key.map(crate::platforms::wechat::PrefixXor::new)
+        } else {
+            None
+        };
+        let initial_bytes = resume_from;
 
         let writer = tokio::task::spawn_blocking(move || -> Result<WrittenMedia> {
             write_chunks(
@@ -423,10 +544,11 @@ impl MediaDownloader {
                 progress_reporter,
                 disk_write_budget,
                 prefix_xor,
+                initial_bytes,
             )
         });
 
-        let mut streamed_bytes = 0_u64;
+        let mut streamed_bytes = resume_from;
         let stream_result: Result<()> = async {
             loop {
                 let chunk = timeout(DOWNLOAD_IDLE_TIMEOUT, response.chunk())
@@ -476,6 +598,14 @@ impl MediaDownloader {
 
         if outcome.media.bytes != streamed_bytes {
             return Err(Error::Download("媒体文件写入不完整".to_owned()));
+        }
+        if resume_from > 0 {
+            tracing::debug!(
+                event = "media_download_resumed",
+                resume_from,
+                total = streamed_bytes,
+                "resumed partial media download"
+            );
         }
 
         let disk_bytes = match tokio::fs::metadata(&outcome.media.path).await {

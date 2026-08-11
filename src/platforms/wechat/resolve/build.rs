@@ -4,7 +4,7 @@ use serde_json::Value;
 use url::Url;
 
 use crate::{
-    Error, Result,
+    Error, PlatformId, Result,
     model::{MediaSource, MediaSourceKind, ResolvedPost, VideoCodec},
 };
 
@@ -121,7 +121,7 @@ pub(super) fn build_post(
         .and_then(|raw| Url::parse(&raw).ok())
         .filter(is_allowed_media_url);
     Ok(ResolvedPost::new_video(
-        "wechat_channels",
+        PlatformId::WechatChannels,
         non_empty(export_id).unwrap_or(normalized.share_id),
         normalized.canonical_url,
         title,

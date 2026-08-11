@@ -1,0 +1,20 @@
+[package]
+name = "pk"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.97"
+license = "MIT"
+publish = false
+description = "ParseKit CLI"
+repository = "https://github.com/27Aaron/ParseKit"
+
+[[bin]]
+name = "pk"
+path = "src/main.rs"
+
+[dependencies]
+parse-kit = { path = "../.." }
+clap = { version = "4", features = ["derive", "env"] }
+dotenvy = "0.15"
+serde_json = "1"
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }

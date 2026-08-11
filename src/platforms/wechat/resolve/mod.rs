@@ -19,7 +19,7 @@ use serde_json::Value;
 use url::Url;
 use uuid::Uuid;
 
-use crate::{Error, ResolvedPost, Result, platforms::PlatformResolver};
+use crate::{Error, PlatformId, ResolvedPost, Result, platforms::PlatformResolver};
 
 use self::build::build_post;
 use self::share::{endpoint_is_loopback_http, normalize_share_url, query_value};
@@ -276,8 +276,8 @@ impl WechatResolver {
 }
 
 impl PlatformResolver for WechatResolver {
-    fn platform_id(&self) -> &'static str {
-        "wechat_channels"
+    fn platform_id(&self) -> PlatformId {
+        PlatformId::WechatChannels
     }
 
     fn extract_share_url(&self, input: &str) -> Result<Url> {
