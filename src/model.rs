@@ -16,6 +16,28 @@ pub const REVIEWED_WECHAT_MEDIA_HOSTS: &[&str] = &[
     "findermp.video.wechat.com",
 ];
 
+/// Reviewed Douyin media hosts / host-suffixes for download allowlisting.
+///
+/// Entries that start with `.` are **suffix rules** (e.g. `.douyinvod.com` matches
+/// `v3-web.douyinvod.com` but not `douyinvod.com` itself). Exact hostnames match
+/// only themselves. Review new CDN families before adding them.
+pub const REVIEWED_DOUYIN_MEDIA_HOSTS: &[&str] = &[
+    // Play API / redirect front doors
+    "aweme.snssdk.com",
+    "www.douyin.com",
+    "www.iesdouyin.com",
+    // Common ByteDance video CDN suffix families
+    ".douyinvod.com",
+    ".douyincdn.com",
+    ".bytevcloudcdn.com",
+    ".bytecdn.cn",
+    ".bytecdn.com",
+    ".zjcdn.com",
+    ".douyinpic.com",
+    ".ibyteimg.com",
+    ".pstatp.com",
+];
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum VideoCodec {
@@ -107,6 +129,7 @@ impl ResolvedPost {
 fn default_title_for_platform(platform: &str) -> &'static str {
     match platform {
         "wechat_channels" => "微信视频号视频",
+        "douyin" => "抖音视频",
         // Future platforms can add their own fallback titles here.
         _ => "视频",
     }

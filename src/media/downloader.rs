@@ -27,7 +27,7 @@ use uuid::Uuid;
 
 use crate::{
     error::{Error, Result},
-    model::{MediaSource, REVIEWED_WECHAT_MEDIA_HOSTS},
+    model::{MediaSource, REVIEWED_DOUYIN_MEDIA_HOSTS, REVIEWED_WECHAT_MEDIA_HOSTS},
 };
 
 const MAX_REDIRECTS: usize = 5;
@@ -39,10 +39,40 @@ const MIN_FREE_DISK_BYTES: u64 = 512 * 1024 * 1024;
 const DISK_CHECK_INTERVAL_BYTES: u64 = 16 * 1024 * 1024;
 const CHANNELS_ORIGIN: &str = "https://channels.weixin.qq.com";
 const CHANNELS_REFERER: &str = "https://channels.weixin.qq.com/";
+const DOUYIN_ORIGIN: &str = "https://www.douyin.com";
+const DOUYIN_REFERER: &str = "https://www.douyin.com/";
 const MEDIA_USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 \
      (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36";
 const PROGRESS_THRESHOLDS: [u8; 5] = [20, 40, 60, 80, 100];
 const DOWNLOAD_RETRY_DELAYS: [Duration; 2] = [Duration::from_secs(1), Duration::from_secs(2)];
+
+/// Optional Origin / Referer / User-Agent applied to media HTTP requests.
+///
+/// Platforms often require a matching Referer (WeChat CDN vs Douyin CDN).
+#[derive(Clone, Debug, Default)]
+pub struct DownloadRequestIdentity {
+    pub origin: Option<String>,
+    pub referer: Option<String>,
+    pub user_agent: Option<String>,
+}
+
+impl DownloadRequestIdentity {
+    pub fn wechat_channels() -> Self {
+        Self {
+            origin: Some(CHANNELS_ORIGIN.to_owned()),
+            referer: Some(CHANNELS_REFERER.to_owned()),
+            user_agent: Some(MEDIA_USER_AGENT.to_owned()),
+        }
+    }
+
+    pub fn douyin() -> Self {
+        Self {
+            origin: Some(DOUYIN_ORIGIN.to_owned()),
+            referer: Some(DOUYIN_REFERER.to_owned()),
+            user_agent: Some(MEDIA_USER_AGENT.to_owned()),
+        }
+    }
+}
 
 /// Progress reported after source bytes have actually been written to disk.
 ///
@@ -97,6 +127,7 @@ pub struct MediaDownloader {
     max_bytes: u64,
     allowed_hosts: Arc<HashSet<String>>,
     request_timeout: Duration,
+    request_identity: DownloadRequestIdentity,
     disk_write_budget: Arc<StdMutex<DiskWriteBudget>>,
 }
 
@@ -119,16 +150,35 @@ impl MediaDownloader {
         max_bytes: u64,
         allowed_hosts: impl IntoIterator<Item = impl AsRef<str>>,
     ) -> Result<Self> {
-        Self::with_options(workspace_dir, max_bytes, allowed_hosts, REQUEST_TIMEOUT)
+        Self::with_options(
+            workspace_dir,
+            max_bytes,
+            allowed_hosts,
+            REQUEST_TIMEOUT,
+            DownloadRequestIdentity::default(),
+        )
     }
 
     /// Convenience constructor locked to the reviewed WeChat Channels CDN hosts
     /// ([`REVIEWED_WECHAT_MEDIA_HOSTS`]).
     pub fn for_wechat_channels(workspace_dir: impl Into<PathBuf>, max_bytes: u64) -> Result<Self> {
-        Self::with_allowed_hosts(
+        Self::with_options(
             workspace_dir,
             max_bytes,
             REVIEWED_WECHAT_MEDIA_HOSTS.iter().copied(),
+            REQUEST_TIMEOUT,
+            DownloadRequestIdentity::wechat_channels(),
+        )
+    }
+
+    /// Convenience constructor for reviewed Douyin media hosts / suffixes.
+    pub fn for_douyin(workspace_dir: impl Into<PathBuf>, max_bytes: u64) -> Result<Self> {
+        Self::with_options(
+            workspace_dir,
+            max_bytes,
+            REVIEWED_DOUYIN_MEDIA_HOSTS.iter().copied(),
+            REQUEST_TIMEOUT,
+            DownloadRequestIdentity::douyin(),
         )
     }
 
@@ -143,12 +193,13 @@ impl MediaDownloader {
         Self::for_wechat_channels(workspace_dir, max_bytes)
     }
 
-    /// Full constructor: explicit allowlist plus request timeout.
+    /// Full constructor: explicit allowlist, timeout, and request identity.
     pub fn with_options(
         workspace_dir: impl Into<PathBuf>,
         max_bytes: u64,
         allowed_hosts: impl IntoIterator<Item = impl AsRef<str>>,
         request_timeout: Duration,
+        request_identity: DownloadRequestIdentity,
     ) -> Result<Self> {
         if max_bytes == 0 {
             return Err(Error::Config("媒体下载大小上限必须大于零".to_owned()));
@@ -163,11 +214,12 @@ impl MediaDownloader {
             max_bytes,
             allowed_hosts: Arc::new(allowed_hosts),
             request_timeout,
+            request_identity,
             disk_write_budget: Arc::new(StdMutex::new(DiskWriteBudget::default())),
         })
     }
 
-    /// Reviewed hosts this downloader will accept (lowercase).
+    /// Reviewed hosts / suffix rules this downloader will accept (lowercase).
     pub fn allowed_hosts(&self) -> &HashSet<String> {
         self.allowed_hosts.as_ref()
     }
@@ -188,6 +240,7 @@ impl MediaDownloader {
             max_bytes: self.max_bytes.min(max_bytes),
             allowed_hosts: Arc::clone(&self.allowed_hosts),
             request_timeout: self.request_timeout,
+            request_identity: self.request_identity.clone(),
             disk_write_budget: Arc::clone(&self.disk_write_budget),
         })
     }
@@ -322,16 +375,23 @@ impl MediaDownloader {
     }
 
     async fn request_with_client(&self, client: &Client, url: &Url) -> Result<Response> {
-        client
+        let mut request = client
             .get(url.clone())
-            .header(ORIGIN, CHANNELS_ORIGIN)
-            .header(REFERER, CHANNELS_REFERER)
-            .header(USER_AGENT, MEDIA_USER_AGENT)
             .header(ACCEPT, "*/*")
-            .header(ACCEPT_ENCODING, "identity")
-            .send()
-            .await
-            .map_err(map_reqwest_download_error)
+            .header(ACCEPT_ENCODING, "identity");
+        if let Some(origin) = self.request_identity.origin.as_deref() {
+            request = request.header(ORIGIN, origin);
+        }
+        if let Some(referer) = self.request_identity.referer.as_deref() {
+            request = request.header(REFERER, referer);
+        }
+        let user_agent = self
+            .request_identity
+            .user_agent
+            .as_deref()
+            .unwrap_or(MEDIA_USER_AGENT);
+        request = request.header(USER_AGENT, user_agent);
+        request.send().await.map_err(map_reqwest_download_error)
     }
 
     async fn stream_response(
@@ -519,11 +579,23 @@ fn validate_media_url<'a>(url: &'a Url, allowed_hosts: &HashSet<String>) -> Resu
         _ => return Err(Error::Download("媒体地址主机无效".to_owned())),
     };
     let normalized = host.to_ascii_lowercase();
-    if !allowed_hosts.contains(&normalized) {
+    if !host_is_allowed(&normalized, allowed_hosts) {
         return Err(Error::Download("媒体地址主机不在允许列表中".to_owned()));
     }
 
     Ok(host)
+}
+
+/// Exact host match, or suffix rules stored as entries starting with `.`.
+fn host_is_allowed(host: &str, allowed_hosts: &HashSet<String>) -> bool {
+    if allowed_hosts.contains(host) {
+        return true;
+    }
+    allowed_hosts.iter().any(|entry| {
+        // Suffix rules look like ".douyinvod.com" and require a subdomain label
+        // (`v3.douyinvod.com` matches; bare `douyinvod.com` does not).
+        entry.starts_with('.') && host.len() > entry.len() && host.ends_with(entry.as_str())
+    })
 }
 
 async fn resolve_public_addresses(host: &str) -> Result<Vec<SocketAddr>> {
@@ -903,6 +975,15 @@ fn valid_host_name(host: &str) -> bool {
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-'))
 }
 
+fn valid_allowlist_entry(entry: &str) -> bool {
+    if let Some(suffix) = entry.strip_prefix('.') {
+        // Suffix rules must look like ".cdn.example" (dot + multi-label host).
+        valid_host_name(suffix) && suffix.contains('.')
+    } else {
+        valid_host_name(entry)
+    }
+}
+
 fn normalize_allowed_hosts(
     hosts: impl IntoIterator<Item = impl AsRef<str>>,
 ) -> Result<HashSet<String>> {
@@ -911,7 +992,11 @@ fn normalize_allowed_hosts(
         .map(|host| host.as_ref().trim().to_ascii_lowercase())
         .filter(|host| !host.is_empty())
         .collect::<HashSet<_>>();
-    if allowed_hosts.is_empty() || allowed_hosts.iter().any(|host| !valid_host_name(host)) {
+    if allowed_hosts.is_empty()
+        || allowed_hosts
+            .iter()
+            .any(|host| !valid_allowlist_entry(host))
+    {
         return Err(Error::Config("媒体主机允许列表无效".to_owned()));
     }
     Ok(allowed_hosts)
@@ -967,6 +1052,40 @@ mod tests {
             downloader.allowed_hosts().len(),
             REVIEWED_WECHAT_MEDIA_HOSTS.len()
         );
+    }
+
+    #[test]
+    fn host_allowlist_supports_suffix_rules() {
+        let allowed = normalize_allowed_hosts([".douyinvod.com", "aweme.snssdk.com"]).unwrap();
+        let ok = Url::parse("https://v3-web.douyinvod.com/path/video.mp4").unwrap();
+        assert_eq!(
+            validate_media_url(&ok, &allowed).unwrap(),
+            "v3-web.douyinvod.com"
+        );
+        let exact = Url::parse("https://aweme.snssdk.com/aweme/v1/play/?video_id=x").unwrap();
+        assert_eq!(
+            validate_media_url(&exact, &allowed).unwrap(),
+            "aweme.snssdk.com"
+        );
+        for raw in [
+            "https://douyinvod.com/path",
+            "https://evil-douyinvod.com/path",
+            "https://example.com/path",
+        ] {
+            let url = Url::parse(raw).unwrap();
+            assert!(validate_media_url(&url, &allowed).is_err(), "{raw}");
+        }
+    }
+
+    #[test]
+    fn for_douyin_uses_reviewed_host_set() {
+        let downloader = MediaDownloader::for_douyin("media", 1_024).unwrap();
+        for host in REVIEWED_DOUYIN_MEDIA_HOSTS {
+            assert!(
+                downloader.allowed_hosts().contains(*host),
+                "missing reviewed host {host}"
+            );
+        }
     }
 
     #[tokio::test]
@@ -1109,6 +1228,7 @@ mod tests {
             100,
             HashSet::from(["EXAMPLE.COM".to_owned()]),
             Duration::from_secs(17),
+            DownloadRequestIdentity::default(),
         )
         .unwrap();
 
@@ -1137,6 +1257,7 @@ mod tests {
             100,
             HashSet::from(["example.com".to_owned()]),
             Duration::from_secs(17),
+            DownloadRequestIdentity::default(),
         )
         .unwrap();
 
@@ -1150,6 +1271,7 @@ mod tests {
             100,
             HashSet::from(["example.com".to_owned()]),
             Duration::from_secs(120),
+            DownloadRequestIdentity::default(),
         )
         .unwrap();
 
@@ -1174,6 +1296,7 @@ mod tests {
             100,
             HashSet::from(["allowed.example".to_owned()]),
             Duration::from_secs(17),
+            DownloadRequestIdentity::default(),
         )
         .unwrap();
         let disallowed = Url::parse("https://127.0.0.1/cover.jpg").unwrap();

@@ -1,7 +1,7 @@
 use std::{env, path::PathBuf, time::Duration};
 
 use parse_core::{
-    media::{MediaDownloader, decrypt_file_prefix, probe_media},
+    media::{DownloadRequestIdentity, MediaDownloader, decrypt_file_prefix, probe_media},
     model::{MediaSource, MediaSourceKind, REVIEWED_WECHAT_MEDIA_HOSTS, ResolvedPost},
     wechat::WechatResolver,
 };
@@ -55,6 +55,7 @@ async fn downloads_decrypts_and_probes_wechat_channels_sample() {
         LIVE_DOWNLOAD_LIMIT_BYTES,
         REVIEWED_WECHAT_MEDIA_HOSTS.iter().copied(),
         LIVE_DOWNLOAD_TIMEOUT,
+        DownloadRequestIdentity::wechat_channels(),
     )
     .unwrap_or_else(|_| panic!("failed to initialize the live media downloader"));
     let downloaded = downloader
