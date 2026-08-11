@@ -11,6 +11,8 @@ use url::{Host, Url};
 
 use crate::{Error, Result};
 
+use crate::media::host::host_matches_rules;
+
 pub(super) const DNS_TIMEOUT: Duration = Duration::from_secs(5);
 
 pub(super) fn validate_media_url<'a>(
@@ -43,13 +45,7 @@ pub(super) fn validate_media_url<'a>(
 }
 
 pub(super) fn host_is_allowed(host: &str, allowed_hosts: &HashSet<String>) -> bool {
-    if allowed_hosts.contains(host) {
-        return true;
-    }
-    // ".cdn.example" matches subdomains only, not the bare apex.
-    allowed_hosts.iter().any(|entry| {
-        entry.starts_with('.') && host.len() > entry.len() && host.ends_with(entry.as_str())
-    })
+    host_matches_rules(host, allowed_hosts.iter().map(String::as_str))
 }
 
 pub(super) async fn resolve_public_addresses(host: &str) -> Result<Vec<SocketAddr>> {

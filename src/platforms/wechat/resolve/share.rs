@@ -4,7 +4,7 @@ use regex::Regex;
 use url::Url;
 
 use crate::{
-    Error, Result, platforms::util::trim_url_candidate,
+    Error, Result, media::host::is_reviewed_https_url, platforms::util::trim_url_candidate,
     platforms::wechat::hosts::REVIEWED_MEDIA_HOSTS,
 };
 
@@ -94,14 +94,7 @@ pub fn derive_direct_media_url(source: &Url) -> Option<Url> {
 }
 
 pub(super) fn is_allowed_media_url(url: &Url) -> bool {
-    url.scheme() == "https"
-        && url.username().is_empty()
-        && url.password().is_none()
-        && url.port().is_none()
-        && url.fragment().is_none()
-        && url
-            .host_str()
-            .is_some_and(|host| !host.ends_with('.') && REVIEWED_MEDIA_HOSTS.contains(&host))
+    is_reviewed_https_url(url, REVIEWED_MEDIA_HOSTS)
 }
 
 pub(super) fn endpoint_is_loopback_http(url: &Url) -> bool {

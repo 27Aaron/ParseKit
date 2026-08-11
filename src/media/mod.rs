@@ -2,6 +2,7 @@
 
 pub mod bmff;
 pub mod downloader;
+pub(crate) mod host;
 pub mod probe;
 
 pub use bmff::{file_prefix_looks_like_bmff, looks_like_bmff, prefix_looks_like_bmff};
