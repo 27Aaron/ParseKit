@@ -2,15 +2,13 @@
 
 use std::path::PathBuf;
 
-use parse_kit::{
-    ContentKind, Result, platforms::util::display_title, wechat::WechatCredentialStatus,
-};
+use parse_kit::{ContentKind, Result, wechat::WechatCredentialStatus};
 
 use crate::{
     args::Prefer,
     config::{self, build_kit},
     output::{print_post_json, print_post_summary},
-    sources::select_sources,
+    sources::{requested_source_index, select_sources},
 };
 
 pub async fn resolve(input: &str, json: bool) -> Result<()> {
@@ -59,7 +57,7 @@ pub async fn download(
                 serde_json::json!({
                     "platform": post.platform,
                     "post_id": post.post_id,
-                    "title": display_title(&post),
+                    "title": post.display_title(),
                     "kind": post.kind,
                     "files": paths.iter().map(|(p, b)| serde_json::json!({
                         "path": p,
@@ -76,7 +74,8 @@ pub async fn download(
         return Ok(());
     }
 
-    let sources = select_sources(&post, prefer, source)?;
+    let selected_index = requested_source_index(post.kind, source, first_only);
+    let sources = select_sources(&post, prefer, selected_index)?;
     let media = downloader
         .download_playable(sources.iter().copied())
         .await?;
@@ -89,7 +88,7 @@ pub async fn download(
             serde_json::json!({
                 "platform": post.platform,
                 "post_id": post.post_id,
-                "title": display_title(&post),
+                "title": post.display_title(),
                 "path": path,
                 "bytes": bytes,
                 "source_count": post.media_sources().count(),
