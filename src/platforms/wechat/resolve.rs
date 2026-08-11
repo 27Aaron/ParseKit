@@ -1,7 +1,6 @@
 use std::{sync::Arc, time::Duration};
 
 use chrono::Utc;
-use futures_util::StreamExt;
 use regex::Regex;
 use reqwest::{
     Client, Response, StatusCode,
@@ -15,8 +14,12 @@ use uuid::Uuid;
 
 use crate::{
     Error, Result,
-    model::{MediaSource, MediaSourceKind, REVIEWED_WECHAT_MEDIA_HOSTS, ResolvedPost, VideoCodec},
-    platforms::PlatformResolver,
+    model::{MediaSource, MediaSourceKind, ResolvedPost, VideoCodec},
+    platforms::{
+        PlatformResolver,
+        util::{map_network_error as map_network_error_msg, read_body_limited, trim_url_candidate},
+        wechat::hosts::REVIEWED_MEDIA_HOSTS,
+    },
 };
 
 const PARSE_ENDPOINT: &str = "https://yuanbao.tencent.com/api/weixin/get_parse_result";
@@ -293,9 +296,7 @@ pub fn extract_share_url(input: &str) -> Result<Url> {
     });
 
     for matched in pattern.find_iter(input) {
-        let candidate = matched.as_str().trim_end_matches([
-            '。', '，', ',', '.', '！', '!', '？', '?', ')', '）', ']', '】',
-        ]);
+        let candidate = trim_url_candidate(matched.as_str());
         let Ok(url) = Url::parse(candidate) else {
             continue;
         };
@@ -633,7 +634,7 @@ fn is_allowed_media_url(url: &Url) -> bool {
         && url.fragment().is_none()
         && url
             .host_str()
-            .is_some_and(|host| !host.ends_with('.') && REVIEWED_WECHAT_MEDIA_HOSTS.contains(&host))
+            .is_some_and(|host| !host.ends_with('.') && REVIEWED_MEDIA_HOSTS.contains(&host))
 }
 
 fn endpoint_is_loopback_http(url: &Url) -> bool {
@@ -701,33 +702,12 @@ fn map_status(status: StatusCode, yuanbao: bool) -> Result<()> {
 }
 
 fn map_network_error(error: &reqwest::Error) -> Error {
-    if error.is_timeout() {
-        Error::Network("上游请求超时".into())
-    } else {
-        // Formatting reqwest::Error can include a signed URL or endpoint.
-        Error::Network("无法连接上游服务".into())
-    }
+    // Formatting reqwest::Error can include a signed URL or endpoint.
+    map_network_error_msg(error, "上游请求超时", "无法连接上游服务")
 }
 
 async fn read_json(response: Response) -> Result<Value> {
-    if response
-        .content_length()
-        .is_some_and(|length| length > MAX_JSON_BYTES as u64)
-    {
-        return Err(Error::UpstreamChanged);
-    }
-    let mut bytes = Vec::new();
-    let mut stream = response.bytes_stream();
-    while let Some(chunk) = stream.next().await {
-        let chunk = chunk.map_err(|error| map_network_error(&error))?;
-        let next_len = bytes
-            .len()
-            .checked_add(chunk.len())
-            .filter(|length| *length <= MAX_JSON_BYTES)
-            .ok_or(Error::UpstreamChanged)?;
-        bytes.reserve(next_len.saturating_sub(bytes.len()));
-        bytes.extend_from_slice(&chunk);
-    }
+    let bytes = read_body_limited(response, MAX_JSON_BYTES, map_network_error).await?;
     serde_json::from_slice(&bytes).map_err(|_| Error::UpstreamChanged)
 }
 
@@ -823,7 +803,7 @@ mod tests {
 
     #[test]
     fn derives_direct_media_urls_for_every_reviewed_host() {
-        for host in REVIEWED_WECHAT_MEDIA_HOSTS {
+        for host in REVIEWED_MEDIA_HOSTS {
             let source = Url::parse(&format!(
                 "https://{host}/video.mp4?token=token&quality=hd&encfilekey=key"
             ))

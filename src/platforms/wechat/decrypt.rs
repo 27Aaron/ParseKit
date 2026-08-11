@@ -9,8 +9,11 @@ use crate::{Error, Result};
 
 const ENCRYPTED_PREFIX_BYTES: usize = 128 * 1024;
 
-/// Decrypts the WeChat Channels encrypted prefix when a matching decimal
-/// `decode_key` accompanied the media URL. Returns `true` when bytes changed.
+/// Decrypts the WeChat Channels encrypted media prefix when a matching decimal
+/// `decode_key` accompanied the media URL.
+///
+/// This is **WeChat Channels only** (ISAAC64 XOR over the first 128 KiB). Other
+/// platforms must not call it. Returns `true` when bytes changed.
 pub async fn decrypt_file_prefix(path: &Path, decode_key: u64) -> Result<bool> {
     let mut file = OpenOptions::new().read(true).write(true).open(path).await?;
     let length = file
