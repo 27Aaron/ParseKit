@@ -28,7 +28,7 @@ pub mod douyin {
 }
 
 pub use error::{Error, Result};
-pub use hub::ParseHub;
+pub use hub::{ParseHub, ParseHubBuilder};
 pub use model::{MediaSource, MediaSourceKind, ResolvedPost, VideoCodec};
 pub use platforms::{DouyinResolver, Platform, PlatformResolver, WechatResolver};
 
