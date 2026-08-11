@@ -2,14 +2,16 @@
 //!
 //! # Adding a platform
 //!
-//! 1. Add `platforms/<name>.rs` with a concrete resolver type.
+//! 1. Add `platforms/<name>.rs` (or a subdirectory) with a concrete resolver.
 //! 2. Implement [`PlatformResolver`] for that type.
 //! 3. Add a variant to [`Platform`] and forward methods in its `impl`.
-//! 4. Construct and push it in [`crate::ParseHub::new`] (registration order
-//!    is the match order for share text / URLs).
+//! 4. Register it via [`crate::ParseHub::builder`] (order is match order).
 //! 5. If the matcher is stateless, also list its free `extract_share_url` in
-//!    [`stateless_extractors`] so [`crate::ParseHub::extract_share_url`] works
+//!    [`STATELESS_EXTRACTORS`] so [`crate::ParseHub::extract_share_url`] works
 //!    without a hub instance.
+//!
+//! Platform-private data (CDN hosts, cookies, decrypt) stays under that
+//! platform's module — not in shared `model` / `media`.
 
 use std::future::Future;
 
@@ -18,10 +20,18 @@ use url::Url;
 use crate::{Error, ResolvedPost, Result};
 
 pub mod douyin;
+pub mod util;
 pub mod wechat;
 
 pub use douyin::DouyinResolver;
 pub use wechat::WechatResolver;
+
+/// Stateless URL matchers in default registration order (WeChat, then Douyin).
+///
+/// This is the single source of truth for match order used by
+/// [`extract_share_url`] and documented for [`crate::ParseHub::builder`].
+pub const STATELESS_EXTRACTORS: &[fn(&str) -> Result<Url>] =
+    &[wechat::extract_share_url, douyin::extract_share_url];
 
 /// Contract every platform resolver implements.
 ///
@@ -97,16 +107,9 @@ impl Platform {
     }
 }
 
-/// Stateless URL matchers in registration order.
-///
-/// Used by [`crate::ParseHub::extract_share_url`] when no hub instance exists yet.
-fn stateless_extractors() -> &'static [fn(&str) -> Result<Url>] {
-    &[wechat::extract_share_url, douyin::extract_share_url]
-}
-
 /// Static extract without a [`crate::ParseHub`] instance.
 pub fn extract_share_url(input: &str) -> Result<Url> {
-    for extract in stateless_extractors() {
+    for extract in STATELESS_EXTRACTORS {
         match extract(input) {
             Ok(url) => return Ok(url),
             Err(Error::UnsupportedUrl) => {}
@@ -139,5 +142,15 @@ mod tests {
         let err = extract_share_url("https://www.example.com/video/1")
             .expect_err("unknown host should be unsupported");
         assert!(matches!(err, Error::UnsupportedUrl));
+    }
+
+    #[test]
+    fn default_match_order_is_wechat_then_douyin() {
+        assert_eq!(STATELESS_EXTRACTORS.len(), 2);
+        // Ambiguous free text is not expected; order is documented for hub registration.
+        let wechat = wechat::extract_share_url("https://weixin.qq.com/sph/A27pGwf5f9").unwrap();
+        let douyin = douyin::extract_share_url("https://v.douyin.com/iAbCdEf/").unwrap();
+        assert!(wechat.as_str().contains("weixin"));
+        assert!(douyin.as_str().contains("douyin"));
     }
 }
