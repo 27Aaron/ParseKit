@@ -1,0 +1,264 @@
+//! Douyin resolver unit tests.
+
+use super::{
+    parse::{
+        build_post_from_router, parse_any_page_data, parse_router_data, remove_video_watermark,
+    },
+    share::extract_aweme_id,
+    *,
+};
+
+#[test]
+fn extracts_urls_from_share_text() {
+    let cases = [
+        (
+            "打开抖音 https://v.douyin.com/iAbCdEf/ 看看",
+            "https://v.douyin.com/iAbCdEf/",
+        ),
+        (
+            "https://www.douyin.com/video/7123456789012345678",
+            "https://www.douyin.com/video/7123456789012345678",
+        ),
+        (
+            "https://www.iesdouyin.com/share/video/7123456789012345678/",
+            "https://www.iesdouyin.com/share/video/7123456789012345678/",
+        ),
+    ];
+    for (input, expected) in cases {
+        let url = extract_share_url(input).expect(input);
+        assert_eq!(url.as_str(), expected);
+    }
+}
+
+#[test]
+fn rejects_non_douyin_and_user_paths() {
+    assert!(matches!(
+        extract_share_url("https://www.example.com/video/1"),
+        Err(Error::UnsupportedUrl)
+    ));
+    assert!(matches!(
+        extract_share_url("https://www.douyin.com/share/user/123"),
+        Err(Error::UnsupportedUrl)
+    ));
+    assert!(matches!(
+        extract_share_url("https://www.douyin.com/user/self"),
+        Err(Error::UnsupportedUrl)
+    ));
+}
+
+#[test]
+fn extracts_aweme_ids() {
+    assert_eq!(
+        extract_aweme_id("https://www.douyin.com/video/7123456789012345678?x=1").as_deref(),
+        Some("7123456789012345678")
+    );
+    assert_eq!(
+        extract_aweme_id("https://www.iesdouyin.com/share/video/7123456789012345678/").as_deref(),
+        Some("7123456789012345678")
+    );
+    assert_eq!(
+        extract_aweme_id("https://www.douyin.com/discover?modal_id=7123456789012345678").as_deref(),
+        Some("7123456789012345678")
+    );
+    assert_eq!(
+        extract_aweme_id("https://www.douyin.com/note/7123456789012345678").as_deref(),
+        Some("7123456789012345678")
+    );
+}
+
+#[test]
+fn builds_post_from_fixture_item_list() {
+    let router: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../tests/fixtures/douyin/router_video.json"
+    ))
+    .expect("committed douyin router fixture");
+
+    let post = build_post_from_router("7123456789012345678", &router).unwrap();
+    assert_eq!(post.platform, PlatformId::Douyin);
+    assert_eq!(post.post_id, "7123456789012345678");
+    assert_eq!(post.title.as_deref(), Some("测试标题"));
+    let primary = post.primary_video().expect("primary video");
+    assert!(primary.url.as_str().contains("play/?video_id="));
+    assert!(!primary.url.as_str().contains("playwm"));
+    assert_eq!(primary.width, Some(720));
+    assert_eq!(primary.height, Some(1280));
+    assert!(post.cover_url.is_some());
+}
+
+#[test]
+fn parse_router_data_from_committed_html_fixture() {
+    let html = include_str!("../../../tests/fixtures/douyin/share_page_router.html");
+    let value = parse_router_data(html).unwrap();
+    assert!(
+        value
+            .pointer("/loaderData/video_(id)~1page/videoInfoRes")
+            .is_some()
+    );
+}
+
+#[test]
+fn filter_list_maps_to_not_found() {
+    let router = serde_json::json!({
+        "loaderData": {
+            "video_(id)/page": {
+                "videoInfoRes": {
+                    "status_code": 0,
+                    "filter_list": [{
+                        "aweme_id": "1",
+                        "filter_reason": "SYSTEM_ITEM_NOT_EXIST"
+                    }],
+                    "item_list": []
+                }
+            }
+        }
+    });
+    let err = build_post_from_router("1", &router).unwrap_err();
+    assert!(matches!(err, Error::NotFound));
+}
+
+#[test]
+fn image_posts_become_image_set() {
+    let router = serde_json::json!({
+        "loaderData": {
+            "video_(id)/page": {
+                "videoInfoRes": {
+                    "status_code": 0,
+                    "filter_list": [],
+                    "item_list": [{
+                        "aweme_id": "1",
+                        "desc": "图集",
+                        "images": [
+                            {"url_list": ["https://p3.douyinpic.com/a.jpg"], "width": 1080, "height": 1440},
+                            {"url_list": ["https://p3.douyinpic.com/b.jpg"]}
+                        ],
+                        "video": {}
+                    }]
+                }
+            }
+        }
+    });
+    let post = build_post_from_router("1", &router).unwrap();
+    assert_eq!(post.kind, crate::ContentKind::ImageSet);
+    assert_eq!(post.media_sources().count(), 2);
+    assert!(post.primary_video().is_none());
+    assert!(
+        post.media_sources()
+            .next()
+            .expect("first image")
+            .url
+            .as_str()
+            .contains("douyinpic.com")
+    );
+}
+
+#[test]
+fn unreviewed_media_hosts_are_discarded() {
+    let router = serde_json::json!({
+        "loaderData": {
+            "video_(id)/page": {
+                "videoInfoRes": {
+                    "filter_list": [],
+                    "item_list": [{
+                        "aweme_id": "9",
+                        "video": {"play_addr": {"url_list": ["https://evil.test/play.mp4"]}}
+                    }]
+                }
+            }
+        }
+    });
+
+    assert!(matches!(
+        build_post_from_router("9", &router),
+        Err(Error::MediaUnavailable)
+    ));
+}
+
+#[test]
+fn watermark_cleanup_only_changes_the_path_segment() {
+    let url =
+        Url::parse("https://aweme.snssdk.com/aweme/v1/playwm/?video_id=playwm-token&note=playwm")
+            .expect("test URL");
+    let cleaned = remove_video_watermark(url);
+
+    assert_eq!(cleaned.path(), "/aweme/v1/play/");
+    assert_eq!(cleaned.query(), Some("video_id=playwm-token&note=playwm"));
+}
+
+#[test]
+fn multi_bitrate_becomes_fallbacks() {
+    let router = serde_json::json!({
+        "loaderData": {
+            "video_(id)/page": {
+                "videoInfoRes": {
+                    "status_code": 0,
+                    "filter_list": [],
+                    "item_list": [{
+                        "aweme_id": "9",
+                        "desc": "多清晰度",
+                        "video": {
+                            "bit_rate": [
+                                {
+                                    "bit_rate": 500_000,
+                                    "play_addr": {
+                                        "url_list": ["https://aweme.snssdk.com/aweme/v1/play/?video_id=low"],
+                                        "width": 720,
+                                        "height": 1280,
+                                        "data_size": 1_000
+                                    }
+                                },
+                                {
+                                    "bit_rate": 2_000_000,
+                                    "play_addr": {
+                                        "url_list": ["https://aweme.snssdk.com/aweme/v1/play/?video_id=high"],
+                                        "width": 1080,
+                                        "height": 1920,
+                                        "data_size": 5_000
+                                    }
+                                }
+                            ]
+                        }
+                    }]
+                }
+            }
+        }
+    });
+    let post = build_post_from_router("9", &router).unwrap();
+    assert!(
+        post.primary_video()
+            .expect("primary video")
+            .url
+            .as_str()
+            .contains("video_id=high")
+    );
+    assert_eq!(post.video_fallbacks().len(), 1);
+    assert!(
+        post.video_fallbacks()[0]
+            .url
+            .as_str()
+            .contains("video_id=low")
+    );
+}
+
+#[test]
+fn parse_router_data_from_html_snippet() {
+    let html = r#"<!doctype html><html><body>
+<script>window._ROUTER_DATA = {"loaderData":{"video_(id)/page":{"videoInfoRes":{"item_list":[],"filter_list":[],"status_code":0}}}};</script>
+</body></html>"#;
+    let value = parse_router_data(html).unwrap();
+    assert!(
+        value
+            .pointer("/loaderData/video_(id)~1page/videoInfoRes")
+            .is_some()
+    );
+}
+
+#[test]
+fn parse_any_page_data_accepts_render_data_marker() {
+    let html = r#"<!doctype html><script>window.__RENDER_DATA__ = {"loaderData":{"video_(id)/page":{"videoInfoRes":{"item_list":[],"filter_list":[],"status_code":0}}}};</script>"#;
+    let value = parse_any_page_data(html).unwrap();
+    assert!(
+        value
+            .pointer("/loaderData/video_(id)~1page/videoInfoRes")
+            .is_some()
+    );
+}
