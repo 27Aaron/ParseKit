@@ -10,7 +10,9 @@
 
 use std::io::{self, IsTerminal, Read, Write};
 
-use parse_kit::{Error, MediaSource, Result};
+use parse_kit::{Error, MediaSource, MediaSourceKind, Result};
+
+use crate::ui::{self, pad_display, pad_display_left};
 
 const GREEN: &str = "\x1b[32m";
 const CYAN: &str = "\x1b[36m";
@@ -18,9 +20,25 @@ const DIM: &str = "\x1b[2m";
 const RESET: &str = "\x1b[0m";
 const ICON_ON: &str = "●";
 const ICON_OFF: &str = "○";
+const COL_SEP: &str = "  ·  ";
+
+/// Column-aligned source list with a Chinese header explaining each field.
+#[derive(Debug, Clone)]
+pub struct SourcePickerTable {
+    /// Header line aligned with [`Self::rows`] (画质 / 分辨率 / 码率 / …).
+    pub header: String,
+    /// One label per source, column-aligned with [`Self::header`].
+    pub rows: Vec<String>,
+}
 
 /// Single-choice radio list. Returns `None` if cancelled.
-pub fn pick_one(options: &[String], default: usize) -> Result<Option<usize>> {
+///
+/// `column_header`, when set, is drawn above the options (aligned with labels).
+pub fn pick_one(
+    options: &[String],
+    default: usize,
+    column_header: Option<&str>,
+) -> Result<Option<usize>> {
     if options.is_empty() {
         return Err(Error::MediaUnavailable);
     }
@@ -28,7 +46,11 @@ pub fn pick_one(options: &[String], default: usize) -> Result<Option<usize>> {
     if options.len() == 1 || !stdin_stdout_tty() {
         return Ok(Some(default));
     }
-    match run_picker(options, Mode::Single { cursor: default })? {
+    match run_picker(
+        options,
+        column_header,
+        Mode::Single { cursor: default },
+    )? {
         Outcome::Cancel => Ok(None),
         Outcome::Single(i) => Ok(Some(i)),
         Outcome::Multi(v) => Ok(v.into_iter().next()),
@@ -36,7 +58,11 @@ pub fn pick_one(options: &[String], default: usize) -> Result<Option<usize>> {
 }
 
 /// Multi-select. Space toggles, Enter confirms. Returns `None` if cancelled.
-pub fn pick_many(options: &[String], preselect_all: bool) -> Result<Option<Vec<usize>>> {
+pub fn pick_many(
+    options: &[String],
+    preselect_all: bool,
+    column_header: Option<&str>,
+) -> Result<Option<Vec<usize>>> {
     if options.is_empty() {
         return Err(Error::MediaUnavailable);
     }
@@ -55,6 +81,7 @@ pub fn pick_many(options: &[String], preselect_all: bool) -> Result<Option<Vec<u
     };
     match run_picker(
         options,
+        column_header,
         Mode::Multi {
             cursor: 0,
             selected,
@@ -66,16 +93,172 @@ pub fn pick_many(options: &[String], preselect_all: bool) -> Result<Option<Vec<u
     }
 }
 
-/// Build picker labels from media sources.
-pub fn source_option_labels(sources: &[&MediaSource]) -> Vec<String> {
-    sources
+/// Build aligned table rows plus a header (画质 / 分辨率 / 码率 / 大小 / 类型).
+pub fn source_option_table(sources: &[&MediaSource]) -> SourcePickerTable {
+    let rows: Vec<SourceCols> = sources.iter().map(|source| source_cols(source)).collect();
+    let (header, rows) = align_source_table(&rows);
+    SourcePickerTable { header, rows }
+}
+
+struct SourceCols {
+    label: String,
+    dims: String,
+    rate: String,
+    size: String,
+    kind: String,
+}
+
+fn source_cols(source: &MediaSource) -> SourceCols {
+    let dims = match (source.width, source.height) {
+        (Some(w), Some(h)) => format!("{w}×{h}"),
+        _ => String::new(),
+    };
+    let rate = source
+        .bitrate_bps
+        .filter(|v| *v > 0)
+        .map(format_bitrate)
+        .unwrap_or_default();
+    let size = source
+        .size_hint
+        .filter(|v| *v > 0)
+        .map(ui::format_bytes)
+        .unwrap_or_default();
+    let kind = match source.provenance {
+        MediaSourceKind::Direct => "origin",
+        MediaSourceKind::Derived => "derived",
+        MediaSourceKind::H264 => "h264",
+        MediaSourceKind::H265 => "h265",
+        MediaSourceKind::Generic => "generic",
+    }
+    .to_owned();
+    SourceCols {
+        label: source.quality_label(),
+        dims,
+        rate,
+        size,
+        kind,
+    }
+}
+
+/// Chinese column titles; widths are expanded to fit both headers and data.
+fn header_cols(show_dims: bool, show_rate: bool, show_size: bool, show_kind: bool) -> SourceCols {
+    SourceCols {
+        label: "画质".into(),
+        dims: if show_dims {
+            "分辨率".into()
+        } else {
+            String::new()
+        },
+        rate: if show_rate {
+            "码率".into()
+        } else {
+            String::new()
+        },
+        size: if show_size {
+            "大小".into()
+        } else {
+            String::new()
+        },
+        kind: if show_kind {
+            "类型".into()
+        } else {
+            String::new()
+        },
+    }
+}
+
+fn align_source_table(rows: &[SourceCols]) -> (String, Vec<String>) {
+    if rows.is_empty() {
+        return (String::new(), Vec::new());
+    }
+    let show_dims = rows.iter().any(|r| !r.dims.is_empty());
+    let show_rate = rows.iter().any(|r| !r.rate.is_empty());
+    let show_size = rows.iter().any(|r| !r.size.is_empty());
+    let show_kind = rows.iter().any(|r| !r.kind.is_empty());
+    let header = header_cols(show_dims, show_rate, show_size, show_kind);
+
+    let label_w = rows
         .iter()
-        .enumerate()
-        .map(|(i, source)| {
-            let mark = if i == 0 { "★" } else { " " };
-            format!("{mark}  {}", source.quality_summary())
-        })
-        .collect()
+        .map(|r| ui::display_width(&r.label))
+        .chain(std::iter::once(ui::display_width(&header.label)))
+        .max()
+        .unwrap_or(0);
+    let dims_w = if show_dims {
+        rows.iter()
+            .map(|r| ui::display_width(&r.dims))
+            .chain(std::iter::once(ui::display_width(&header.dims)))
+            .max()
+            .unwrap_or(0)
+    } else {
+        0
+    };
+    let rate_w = if show_rate {
+        rows.iter()
+            .map(|r| ui::display_width(&r.rate))
+            .chain(std::iter::once(ui::display_width(&header.rate)))
+            .max()
+            .unwrap_or(0)
+    } else {
+        0
+    };
+    let size_w = if show_size {
+        rows.iter()
+            .map(|r| ui::display_width(&r.size))
+            .chain(std::iter::once(ui::display_width(&header.size)))
+            .max()
+            .unwrap_or(0)
+    } else {
+        0
+    };
+    let kind_w = if show_kind {
+        rows.iter()
+            .map(|r| ui::display_width(&r.kind))
+            .chain(std::iter::once(ui::display_width(&header.kind)))
+            .max()
+            .unwrap_or(0)
+    } else {
+        0
+    };
+
+    let format_row = |row: &SourceCols, rates_right: bool| {
+        let mut parts = vec![pad_display(&row.label, label_w)];
+        if dims_w > 0 {
+            parts.push(pad_display(&row.dims, dims_w));
+        }
+        if rate_w > 0 {
+            if rates_right {
+                parts.push(pad_display_left(&row.rate, rate_w));
+            } else {
+                parts.push(pad_display(&row.rate, rate_w));
+            }
+        }
+        if size_w > 0 {
+            if rates_right {
+                parts.push(pad_display_left(&row.size, size_w));
+            } else {
+                parts.push(pad_display(&row.size, size_w));
+            }
+        }
+        if kind_w > 0 {
+            parts.push(pad_display(&row.kind, kind_w));
+        }
+        parts.join(COL_SEP)
+    };
+
+    // Header: left-align titles; data: right-align numeric rate/size.
+    let header_line = format_row(&header, false);
+    let body = rows.iter().map(|row| format_row(row, true)).collect();
+    (header_line, body)
+}
+
+fn format_bitrate(bps: u64) -> String {
+    if bps >= 1_000_000 {
+        format!("{:.1} Mbps", bps as f64 / 1_000_000.0)
+    } else if bps >= 1_000 {
+        format!("{:.0} kbps", bps as f64 / 1_000.0)
+    } else {
+        format!("{bps} bps")
+    }
 }
 
 fn stdin_stdout_tty() -> bool {
@@ -93,10 +276,14 @@ enum Outcome {
     Multi(Vec<usize>),
 }
 
-fn run_picker(options: &[String], mut mode: Mode) -> Result<Outcome> {
+fn run_picker(
+    options: &[String],
+    column_header: Option<&str>,
+    mut mode: Mode,
+) -> Result<Outcome> {
     let _raw = RawMode::enter().map_err(|e| Error::Config(format!("无法进入终端原始模式: {e}")))?;
-    let lines = options.len() + 2;
-    draw(&mode, options)?;
+    let lines = options.len() + 2 + usize::from(column_header.is_some());
+    draw(&mode, options, column_header)?;
 
     let mut stdin = io::stdin();
     let mut buf = [0_u8; 16];
@@ -149,7 +336,7 @@ fn run_picker(options: &[String], mut mode: Mode) -> Result<Outcome> {
                             .collect();
                         if indices.is_empty() {
                             // Keep UI; require at least one selection.
-                            redraw(&mode, options, lines)?;
+                            redraw(&mode, options, column_header, lines)?;
                             continue;
                         }
                         Outcome::Multi(indices)
@@ -164,11 +351,11 @@ fn run_picker(options: &[String], mut mode: Mode) -> Result<Outcome> {
             }
             Key::Other => {}
         }
-        redraw(&mode, options, lines)?;
+        redraw(&mode, options, column_header, lines)?;
     }
 }
 
-fn draw(mode: &Mode, options: &[String]) -> Result<()> {
+fn draw(mode: &Mode, options: &[String], column_header: Option<&str>) -> Result<()> {
     let mut out = io::stdout();
     let (title, hint) = match mode {
         Mode::Single { .. } => (
@@ -183,6 +370,18 @@ fn draw(mode: &Mode, options: &[String]) -> Result<()> {
     writeln!(out, "{CYAN}{title}{RESET}").map_err(io_err)?;
     writeln!(out, "{DIM}{hint}{RESET}").map_err(io_err)?;
 
+    // 1-based display numbers: [ 1] … [13]. Internal cursor stays 0-based.
+    let index_width = options.len().to_string().len().max(1);
+    if let Some(header) = column_header {
+        // Blank gutter matching " {ptr} {circle}  [idx]  " — never print a fake index.
+        let gutter = format!(
+            " {} {}  {}  ",
+            " ",
+            " ",
+            " ".repeat(index_width + 2) // width of "[N]"
+        );
+        writeln!(out, "{DIM}{gutter}{header}{RESET}").map_err(io_err)?;
+    }
     for (i, label) in options.iter().enumerate() {
         let (cursor_here, on) = match mode {
             Mode::Single { cursor } => (*cursor == i, *cursor == i),
@@ -198,15 +397,22 @@ fn draw(mode: &Mode, options: &[String]) -> Result<()> {
         } else {
             " ".into()
         };
-        writeln!(out, " {pointer} {circle}  [{i}]  {label}").map_err(io_err)?;
+        let display_n = i + 1;
+        let index = format!("[{display_n:>index_width$}]");
+        writeln!(out, " {pointer} {circle}  {index}  {label}").map_err(io_err)?;
     }
     out.flush().map_err(io_err)?;
     Ok(())
 }
 
-fn redraw(mode: &Mode, options: &[String], lines: usize) -> Result<()> {
+fn redraw(
+    mode: &Mode,
+    options: &[String],
+    column_header: Option<&str>,
+    lines: usize,
+) -> Result<()> {
     clear_drawn(lines)?;
-    draw(mode, options)
+    draw(mode, options, column_header)
 }
 
 fn clear_drawn(lines: usize) -> Result<()> {
@@ -276,5 +482,82 @@ impl Drop for RawMode {
         unsafe {
             let _ = libc::tcsetattr(fd, libc::TCSANOW, &self.original);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use parse_kit::{MediaSource, MediaSourceKind, VideoCodec};
+    use url::Url;
+
+    use super::{align_source_table, source_cols};
+
+    fn sample(
+        label: &str,
+        w: Option<u32>,
+        h: Option<u32>,
+        bps: Option<u64>,
+        size: Option<u64>,
+        kind: MediaSourceKind,
+    ) -> MediaSource {
+        MediaSource {
+            url: Url::parse("https://upos-sz-mirrorcos.bilivideo.com/v.m4s").unwrap(),
+            codec: VideoCodec::Unknown,
+            provenance: kind,
+            width: w,
+            height: h,
+            size_hint: size,
+            decode_key: None,
+            label: Some(label.into()),
+            bitrate_bps: bps,
+        }
+    }
+
+    #[test]
+    fn source_labels_align_columns() {
+        let sources = [
+            sample(
+                "1080P/AVC",
+                Some(1920),
+                Some(1080),
+                Some(2_600_000),
+                Some(66_500_000),
+                MediaSourceKind::Derived,
+            ),
+            sample(
+                "720P/HEVC",
+                Some(1280),
+                Some(720),
+                Some(359_000),
+                None,
+                MediaSourceKind::Derived,
+            ),
+            sample(
+                "720P/AVC",
+                None,
+                None,
+                None,
+                Some(49_600_000),
+                MediaSourceKind::Direct,
+            ),
+        ];
+        let rows: Vec<_> = sources.iter().map(source_cols).collect();
+        let (header, labels) = align_source_table(&rows);
+        assert_eq!(labels.len(), 3);
+        assert!(header.contains("画质"));
+        assert!(header.contains("分辨率"));
+        assert!(header.contains("码率"));
+        assert!(header.contains("大小"));
+        assert!(header.contains("类型"));
+        let widths: Vec<_> = labels
+            .iter()
+            .map(|l| crate::ui::display_width(l))
+            .collect();
+        assert!(widths.iter().all(|w| *w == widths[0]));
+        assert_eq!(crate::ui::display_width(&header), widths[0]);
+        assert!(labels[0].contains("1080P/AVC"));
+        assert!(labels[0].contains("1920×1080"));
+        assert!(labels[2].contains("origin"));
+        assert!(!labels[0].contains('★'));
     }
 }

@@ -111,13 +111,12 @@ pub async fn reveal_sub(detail: impl AsRef<str>) {
 
 /// Aligned platform row for `platforms` / `doctor`.
 pub fn platform_row(id: &str, name: &str, note: &str) {
-    let name_col: usize = 14;
-    let pad = name_col.saturating_sub(display_width(name));
-    let name_aligned = format!("{name}{}", " ".repeat(pad));
+    let name_aligned = pad_display(name, 14);
     println!("{GREEN}{ICON_OK}{RESET}  {id:<10}  {name_aligned}  ·  {DIM}{note}{RESET}");
 }
 
-fn display_width(text: &str) -> usize {
+/// Terminal display width (ASCII 1, CJK / fullwidth 2).
+pub fn display_width(text: &str) -> usize {
     text.chars()
         .map(|ch| {
             let u = ch as u32;
@@ -138,6 +137,26 @@ fn display_width(text: &str) -> usize {
             }
         })
         .sum()
+}
+
+/// Pad `text` on the right to at least `width` terminal columns.
+pub fn pad_display(text: &str, width: usize) -> String {
+    let w = display_width(text);
+    if w >= width {
+        text.to_owned()
+    } else {
+        format!("{text}{}", " ".repeat(width - w))
+    }
+}
+
+/// Right-align `text` within `width` terminal columns.
+pub fn pad_display_left(text: &str, width: usize) -> String {
+    let w = display_width(text);
+    if w >= width {
+        text.to_owned()
+    } else {
+        format!("{}{text}", " ".repeat(width - w))
+    }
 }
 
 /// Background spinner for long async work (resolve / download).

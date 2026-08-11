@@ -1,9 +1,9 @@
 //! CLI subcommand implementations.
 
-use std::path::PathBuf;
+use std::{path::PathBuf, time::Duration};
 
 use parse_kit::{
-    ContentKind, MediaSource, ResolvedPost, Result, media::MediaDownloader,
+    ContentKind, CredentialStatus, MediaSource, ResolvedPost, Result, media::MediaDownloader,
     wechat::WechatCredentialStatus,
 };
 
@@ -94,9 +94,10 @@ pub async fn download(
     // Interactive pick when TTY and user did not pin --source / first_only.
     let chosen: Vec<&MediaSource> =
         if human && source.is_none() && !first_only && all_sources.len() > 1 {
-            let labels = select::source_option_labels(&all_sources);
+            let table = select::source_option_table(&all_sources);
+            let header = Some(table.header.as_str());
             let picked = if multi_image {
-                let indices = select::pick_many(&labels, true)?;
+                let indices = select::pick_many(&table.rows, true, header)?;
                 match indices {
                     Some(idxs) => idxs,
                     None => {
@@ -109,7 +110,7 @@ pub async fn download(
                     Prefer::Best => 0,
                     Prefer::Smallest => all_sources.len().saturating_sub(1),
                 };
-                match select::pick_one(&labels, default)? {
+                match select::pick_one(&table.rows, default, header)? {
                     Some(idx) => vec![idx],
                     None => {
                         ui::err("Cancelled", "未选择任何源");
@@ -124,7 +125,7 @@ pub async fn download(
                     picked.len(),
                     picked
                         .iter()
-                        .map(|i| format!("[{i}]"))
+                        .map(|i| format!("[{}]", i + 1))
                         .collect::<Vec<_>>()
                         .join(" ")
                 ),
@@ -346,6 +347,12 @@ pub fn platforms(check: bool) -> Result<()> {
     if kit.wechat().is_none() {
         ui::note("set YUANBAO_COOKIE to enable wechat");
     }
+    if kit
+        .bilibili()
+        .is_some_and(|b| b.credential_status() == CredentialStatus::Absent)
+    {
+        ui::note("optional: BILIBILI_COOKIE or `pk bilibili login` for higher quality");
+    }
     if check {
         print_health(&kit);
     }
@@ -385,9 +392,106 @@ fn print_health(kit: &parse_kit::ParseKit) {
     } else {
         ui::note("douyin disabled");
     }
-    if kit.bilibili().is_some() {
-        ui::ok("bilibili", "enabled");
-    } else {
-        ui::note("bilibili disabled");
+    match kit.bilibili() {
+        None => ui::note("bilibili disabled"),
+        Some(bilibili) => match bilibili.credential_status() {
+            CredentialStatus::Present => {
+                ui::ok(
+                    "bilibili",
+                    "cookie present (shape ok; not network-verified)",
+                );
+            }
+            CredentialStatus::Incomplete => {
+                ui::err("bilibili", "cookie incomplete (missing SESSDATA)");
+            }
+            CredentialStatus::Absent => {
+                ui::note("bilibili anonymous (set BILIBILI_COOKIE or run: pk bilibili login)");
+            }
+        },
     }
+}
+
+/// Web QR login → write `BILIBILI_COOKIE` into `.env.local`.
+pub async fn bilibili_login() -> Result<()> {
+    ui::note("requesting Bilibili QR login…");
+    let session = parse_kit::bilibili::start_web_qr_login().await?;
+
+    print_qr_or_url(&session.url);
+
+    ui::note("open the Bilibili app → scan → confirm");
+    ui::note("waiting for scan (timeout 180s)…");
+
+    let cookie = parse_kit::bilibili::wait_web_qr_login(
+        &session.qrcode_key,
+        Duration::from_secs(1),
+        Duration::from_secs(180),
+    )
+    .await?;
+
+    config::save_bilibili_cookie(cookie.as_str())?;
+    let path = config::env_local_path();
+    ui::ok(
+        "login",
+        format!("saved BILIBILI_COOKIE to {}", path.display()),
+    );
+    ui::note("reload shell env if needed; next `pk` in this dir loads .env.local automatically");
+    Ok(())
+}
+
+pub fn bilibili_logout() -> Result<()> {
+    let removed = config::clear_bilibili_cookie()?;
+    if removed {
+        ui::ok("logout", "removed BILIBILI_COOKIE from .env.local");
+    } else {
+        ui::note("no BILIBILI_COOKIE line in .env.local (process env cleared if set)");
+    }
+    Ok(())
+}
+
+pub fn bilibili_status() -> Result<()> {
+    let kit = build_kit()?;
+    match kit.bilibili() {
+        None => ui::note("bilibili not registered"),
+        Some(bilibili) => match bilibili.credential_status() {
+            CredentialStatus::Present => {
+                ui::ok(
+                    "bilibili",
+                    "logged in (SESSDATA present; not network-verified)",
+                );
+            }
+            CredentialStatus::Incomplete => {
+                ui::err("bilibili", "BILIBILI_COOKIE set but missing SESSDATA");
+            }
+            CredentialStatus::Absent => {
+                ui::note("bilibili anonymous — paste cookie into .env or run: pk bilibili login");
+            }
+        },
+    }
+    Ok(())
+}
+
+fn print_qr_or_url(url: &str) {
+    match render_terminal_qr(url) {
+        Ok(art) => {
+            println!();
+            println!("{art}");
+            println!();
+            ui::note(format!("if the QR is unreadable, open: {url}"));
+        }
+        Err(_) => {
+            ui::note(format!("open this URL (or encode as QR): {url}"));
+        }
+    }
+}
+
+fn render_terminal_qr(url: &str) -> std::result::Result<String, ()> {
+    use qrcode::QrCode;
+    use qrcode::render::unicode::Dense1x2;
+
+    let code = QrCode::new(url.as_bytes()).map_err(|_| ())?;
+    Ok(code
+        .render::<Dense1x2>()
+        .dark_color(Dense1x2::Dark)
+        .light_color(Dense1x2::Light)
+        .build())
 }

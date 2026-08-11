@@ -12,10 +12,9 @@ pub fn print_post_summary(post: &ResolvedPost) {
     let total = post.media_sources().count();
     ui::ok("sources", format!("{total} 路（[0] 默认最高）"));
     for (index, source) in post.media_sources().enumerate() {
-        let mark = if index == 0 { "★" } else { "·" };
         ui::ok(
             &format!("source[{index}]"),
-            format!("{mark}  {}", source.quality_summary()),
+            source.quality_summary(),
         );
         ui::sub(source.url.as_str());
     }
@@ -28,12 +27,7 @@ pub fn print_post_summary(post: &ResolvedPost) {
 pub async fn stream_post_summary(post: &ResolvedPost) {
     stream_post_header(post).await;
     for (index, source) in post.media_sources().enumerate() {
-        let mark = if index == 0 { "★" } else { "·" };
-        ui::reveal_ok(
-            &format!("source[{index}]"),
-            format!("{mark}  {}", source.quality_summary()),
-        )
-        .await;
+        ui::reveal_ok(&format!("source[{index}]"), source.quality_summary()).await;
         ui::reveal_sub(source.url.as_str()).await;
     }
     if post.media_sources().count() > 1 {
