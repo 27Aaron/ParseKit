@@ -5,7 +5,7 @@ use tokio::{
     io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt},
 };
 
-use crate::{Error, Result};
+use crate::{Error, Result, media::bmff::looks_like_bmff};
 
 pub(crate) const ENCRYPTED_PREFIX_BYTES: usize = 128 * 1024;
 
@@ -44,22 +44,6 @@ pub async fn decrypt_file_prefix(path: &Path, decode_key: u64) -> Result<bool> {
     Ok(true)
 }
 
-/// True if the file prefix already looks like a playable MP4/BMFF.
-pub async fn prefix_looks_like_bmff(path: &Path) -> Result<bool> {
-    let mut file = OpenOptions::new().read(true).open(path).await?;
-    let length = file
-        .metadata()
-        .await?
-        .len()
-        .min(ENCRYPTED_PREFIX_BYTES as u64) as usize;
-    if length < 8 {
-        return Ok(false);
-    }
-    let mut prefix = vec![0_u8; length];
-    file.read_exact(&mut prefix).await?;
-    Ok(looks_like_bmff(&prefix))
-}
-
 /// Streaming XOR for the encrypted prefix (first 128 KiB).
 pub(crate) struct PrefixXor {
     isaac: Isaac64,
@@ -92,47 +76,6 @@ impl PrefixXor {
             self.remaining -= 1;
         }
     }
-}
-
-fn looks_like_bmff(data: &[u8]) -> bool {
-    let mut offset = 0_usize;
-    for _ in 0..16 {
-        let Some(header) = data.get(offset..offset.saturating_add(8)) else {
-            return false;
-        };
-        let short_size = u32::from_be_bytes(header[..4].try_into().expect("four-byte slice"));
-        let box_type = &header[4..8];
-        let (size, header_size) = if short_size == 1 {
-            let Some(extended) = data.get(offset + 8..offset + 16) else {
-                return false;
-            };
-            (
-                u64::from_be_bytes(extended.try_into().expect("eight-byte slice")),
-                16_u64,
-            )
-        } else if short_size == 0 {
-            (data.len().saturating_sub(offset) as u64, 8_u64)
-        } else {
-            (u64::from(short_size), 8_u64)
-        };
-        if size < header_size {
-            return false;
-        }
-        if matches!(box_type, b"ftyp" | b"styp" | b"moov" | b"mdat") {
-            return true;
-        }
-        let Ok(size) = usize::try_from(size) else {
-            return false;
-        };
-        let Some(next) = offset.checked_add(size) else {
-            return false;
-        };
-        if next <= offset || next > data.len() {
-            return false;
-        }
-        offset = next;
-    }
-    false
 }
 
 #[cfg(test)]

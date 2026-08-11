@@ -550,43 +550,44 @@ mod tests {
 
     #[test]
     fn builds_post_from_fixture_item_list() {
-        let router = serde_json::json!({
-            "loaderData": {
-                "video_(id)/page": {
-                    "videoInfoRes": {
-                        "status_code": 0,
-                        "filter_list": [],
-                        "item_list": [{
-                            "aweme_id": "7123456789012345678",
-                            "desc": "测试标题",
-                            "video": {
-                                "play_addr": {
-                                    "uri": "v0200fg10000abcdefgh",
-                                    "url_list": [
-                                        "https://aweme.snssdk.com/aweme/v1/playwm/?video_id=v0200fg10000abcdefgh&ratio=720p&line=0"
-                                    ],
-                                    "width": 720,
-                                    "height": 1280
-                                },
-                                "cover": {
-                                    "url_list": ["https://p3.douyinpic.com/cover.jpg"]
-                                }
-                            }
-                        }]
-                    }
-                }
-            }
-        });
+        let router: serde_json::Value = serde_json::from_str(include_str!(
+            "../../tests/fixtures/douyin/router_video.json"
+        ))
+        .expect("committed douyin router fixture");
 
         let post = build_post_from_router("7123456789012345678", &router).unwrap();
         assert_eq!(post.platform, "douyin");
         assert_eq!(post.post_id, "7123456789012345678");
         assert_eq!(post.title.as_deref(), Some("测试标题"));
-        assert!(post.video.url.as_str().contains("play/?video_id="));
-        assert!(!post.video.url.as_str().contains("playwm"));
-        assert_eq!(post.video.width, Some(720));
-        assert_eq!(post.video.height, Some(1280));
+        assert!(
+            post.primary_video()
+                .unwrap()
+                .url
+                .as_str()
+                .contains("play/?video_id=")
+        );
+        assert!(
+            !post
+                .primary_video()
+                .unwrap()
+                .url
+                .as_str()
+                .contains("playwm")
+        );
+        assert_eq!(post.primary_video().unwrap().width, Some(720));
+        assert_eq!(post.primary_video().unwrap().height, Some(1280));
         assert!(post.cover_url.is_some());
+    }
+
+    #[test]
+    fn parse_router_data_from_committed_html_fixture() {
+        let html = include_str!("../../tests/fixtures/douyin/share_page_router.html");
+        let value = parse_router_data(html).unwrap();
+        assert!(
+            value
+                .pointer("/loaderData/video_(id)~1page/videoInfoRes")
+                .is_some()
+        );
     }
 
     #[test]

@@ -37,10 +37,7 @@ fn main() -> ExitCode {
                 source,
                 json,
             } => commands::download(&input, output, max_bytes, prefer, source, json).await,
-            Commands::Platforms => {
-                commands::platforms();
-                Ok(())
-            }
+            Commands::Platforms => commands::platforms(),
         }
     });
 

@@ -23,9 +23,9 @@ async fn resolves_douyin_sample_url() {
 
     assert_eq!(post.platform, "douyin");
     assert!(!post.post_id.is_empty());
-    assert_eq!(post.video.url.scheme(), "https");
+    assert_eq!(post.primary_video().unwrap().url.scheme(), "https");
     assert!(
-        post.video.url.host_str().is_some(),
+        post.primary_video().unwrap().url.host_str().is_some(),
         "resolved video URL missing host"
     );
     println!("resolved post_id={} title={:?}", post.post_id, post.title);

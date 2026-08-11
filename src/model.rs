@@ -3,7 +3,7 @@ use std::fmt;
 use serde::{Deserialize, Serialize};
 use url::Url;
 
-use crate::Result;
+use crate::{Error, Result};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -115,7 +115,7 @@ impl fmt::Debug for MediaSource {
     }
 }
 
-/// Resolved post. Prefer [`Self::new_video`] so `media` and `video` stay in sync.
+/// Resolved post. Prefer [`Self::new_video`] so `kind` and `media` stay consistent.
 #[derive(Clone)]
 pub struct ResolvedPost {
     pub platform: String,
@@ -125,8 +125,6 @@ pub struct ResolvedPost {
     pub cover_url: Option<Url>,
     pub kind: ContentKind,
     pub media: Vec<MediaItem>,
-    pub video: MediaSource,
-    pub fallback_videos: Vec<MediaSource>,
 }
 
 impl fmt::Debug for ResolvedPost {
@@ -140,8 +138,7 @@ impl fmt::Debug for ResolvedPost {
             .field("kind", &self.kind)
             .field("media_count", &self.media.len())
             .field("has_cover", &self.cover_url.is_some())
-            .field("video", &self.video)
-            .field("fallback_video_count", &self.fallback_videos.len())
+            .field("primary_video", &self.primary_video())
             .finish()
     }
 }
@@ -156,10 +153,6 @@ impl ResolvedPost {
         video: MediaSource,
         fallback_videos: Vec<MediaSource>,
     ) -> Self {
-        let media = vec![MediaItem::Video {
-            primary: video.clone(),
-            fallbacks: fallback_videos.clone(),
-        }];
         Self {
             platform: platform.into(),
             post_id: post_id.into(),
@@ -167,14 +160,16 @@ impl ResolvedPost {
             title,
             cover_url,
             kind: ContentKind::Video,
-            media,
-            video,
-            fallback_videos,
+            media: vec![MediaItem::Video {
+                primary: video,
+                fallbacks: fallback_videos,
+            }],
         }
     }
 
+    /// All media sources in play order (primary video first, then fallbacks / other items).
     pub fn media_sources(&self) -> impl Iterator<Item = &MediaSource> {
-        std::iter::once(&self.video).chain(self.fallback_videos.iter())
+        self.media.iter().flat_map(MediaItem::sources)
     }
 
     pub fn primary_video(&self) -> Option<&MediaSource> {
@@ -183,8 +178,16 @@ impl ResolvedPost {
             .find_map(|item| item.as_video().map(|(primary, _)| primary))
     }
 
+    /// Fallback video sources for the first video item (excludes primary).
+    pub fn video_fallbacks(&self) -> &[MediaSource] {
+        self.media
+            .iter()
+            .find_map(|item| item.as_video().map(|(_, fallbacks)| fallbacks))
+            .unwrap_or(&[])
+    }
+
     pub fn require_primary_video(&self) -> Result<&MediaSource> {
-        Ok(self.primary_video().unwrap_or(&self.video))
+        self.primary_video().ok_or(Error::MediaUnavailable)
     }
 
     pub fn display_title(&self) -> String {
@@ -220,7 +223,7 @@ mod tests {
     }
 
     #[test]
-    fn new_video_keeps_media_list_and_legacy_fields_aligned() {
+    fn new_video_stores_primary_and_fallbacks_in_media() {
         let primary = sample_source("a.mp4");
         let fallback = sample_source("b.mp4");
         let post = ResolvedPost::new_video(
@@ -234,12 +237,16 @@ mod tests {
         );
         assert_eq!(post.kind, ContentKind::Video);
         assert_eq!(post.media.len(), 1);
-        assert_eq!(post.video.url, primary.url);
-        assert_eq!(post.fallback_videos[0].url, fallback.url);
         assert_eq!(
             post.primary_video().map(|s| s.url.as_str()),
             Some(primary.url.as_str())
         );
+        assert_eq!(post.video_fallbacks().len(), 1);
+        assert_eq!(post.video_fallbacks()[0].url, fallback.url);
         assert_eq!(post.media_sources().count(), 2);
+        assert_eq!(
+            post.require_primary_video().unwrap().url.as_str(),
+            primary.url.as_str()
+        );
     }
 }
