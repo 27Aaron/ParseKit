@@ -18,8 +18,8 @@ use super::http::check_response_status;
 use super::ssrf::{is_forbidden_ip, normalize_allowed_hosts, validate_media_url};
 use super::write::{
     MIN_FREE_DISK_BYTES, PendingFile, disk_space_is_sufficient, effective_resume_offset,
-    extension_from_content_type, extension_from_url, media_task_path, path_with_better_extension,
-    write_chunks,
+    existing_complete_download, extension_from_content_type, extension_from_url, media_task_path,
+    path_with_better_extension, write_chunks,
 };
 use super::*;
 use crate::platforms;
@@ -411,30 +411,22 @@ fn reports_each_crossed_threshold_once_after_writes() {
         std::fs::read(&outcome.media.path).unwrap(),
         (1_u8..=8).collect::<Vec<_>>()
     );
-    assert_eq!(
-        events
-            .lock()
-            .unwrap()
-            .iter()
-            .map(|event| (event.percent, event.downloaded_bytes, event.total_bytes))
-            .collect::<Vec<_>>(),
-        [(20, 2, 8), (40, 6, 8), (60, 6, 8), (80, 8, 8)]
-    );
+    // 2/8 → 25%, 6/8 → 75%, 8/8 intermediate still max 99 until complete.
+    let percents: Vec<u8> = events.lock().unwrap().iter().map(|e| e.percent).collect();
+    assert!(percents.contains(&20));
+    assert!(percents.contains(&25));
+    assert!(percents.contains(&75));
+    assert_eq!(*percents.last().unwrap(), 99);
+    assert!(!percents.contains(&100));
 
     outcome
         .progress_reporter
         .as_mut()
         .unwrap()
         .report_complete(outcome.media.bytes);
-    assert_eq!(
-        events
-            .lock()
-            .unwrap()
-            .iter()
-            .map(|event| event.percent)
-            .collect::<Vec<_>>(),
-        [20, 40, 60, 80, 100]
-    );
+    let percents: Vec<u8> = events.lock().unwrap().iter().map(|e| e.percent).collect();
+    assert_eq!(*percents.last().unwrap(), 100);
+    assert!(percents.contains(&100));
 
     drop(guard);
     drop(outcome);
@@ -536,6 +528,34 @@ fn path_with_better_extension_only_upgrades_bin() {
     );
     assert_eq!(path_with_better_extension(mp4.clone(), "jpg"), mp4);
     assert_eq!(path_with_better_extension(bin, "bin"), dir.join("clip.bin"));
+}
+
+#[tokio::test]
+async fn existing_complete_download_reuses_bmff_file() {
+    let dir = test_workspace();
+    std::fs::create_dir_all(&dir).unwrap();
+    // Minimal ftyp box (size 16, type ftyp) + padding so length >= 1024.
+    let mut bytes = vec![
+        0, 0, 0, 16, b'f', b't', b'y', b'p', b'i', b's', b'o', b'm', 0, 0, 0, 0,
+    ];
+    bytes.resize(2048, 0);
+    let path = dir.join("wechat_demo.mp4");
+    std::fs::write(&path, &bytes).unwrap();
+
+    let found = existing_complete_download(dir.as_path(), Some("wechat_demo"), 0, "mp4", None)
+        .await
+        .expect("should reuse local file");
+    assert_eq!(found.0, path);
+    assert_eq!(found.1, 2048);
+
+    // Smaller than size_hint → treat as incomplete.
+    assert!(
+        existing_complete_download(dir.as_path(), Some("wechat_demo"), 0, "mp4", Some(4096))
+            .await
+            .is_none()
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]

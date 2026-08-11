@@ -38,6 +38,87 @@ pub(super) fn media_task_path(
     directory.join(name)
 }
 
+const EXISTING_MEDIA_EXTS: &[&str] = &[
+    "mp4", "m4v", "mov", "m4s", "webm", "flv", "jpg", "jpeg", "png", "webp", "gif", "bin",
+];
+
+/// Looks for a complete on-disk file for `{stem}` / `{stem}_{n}` under `directory`.
+pub(super) async fn existing_complete_download(
+    directory: &Path,
+    file_stem: Option<&str>,
+    sequence: u32,
+    preferred_ext: &str,
+    size_hint: Option<u64>,
+) -> Option<(PathBuf, u64)> {
+    let stem = file_stem.filter(|value| !value.is_empty())?;
+    let base = if sequence == 0 {
+        stem.to_owned()
+    } else {
+        format!("{stem}_{sequence}")
+    };
+
+    let mut exts = Vec::with_capacity(EXISTING_MEDIA_EXTS.len() + 1);
+    exts.push(preferred_ext);
+    for ext in EXISTING_MEDIA_EXTS {
+        if *ext != preferred_ext {
+            exts.push(*ext);
+        }
+    }
+
+    for ext in exts {
+        let path = directory.join(format!("{base}.{ext}"));
+        let Ok(meta) = tokio::fs::metadata(&path).await else {
+            continue;
+        };
+        let len = meta.len();
+        if len == 0 {
+            continue;
+        }
+        if let Some(hint) = size_hint {
+            if len >= hint {
+                return Some((path, len));
+            }
+            // Incomplete relative to size_hint — allow resume/re-download.
+            continue;
+        }
+        if looks_like_complete_media(&path, len).await {
+            return Some((path, len));
+        }
+    }
+    None
+}
+
+async fn looks_like_complete_media(path: &Path, len: u64) -> bool {
+    if len < 1024 {
+        return false;
+    }
+    if crate::media::file_prefix_looks_like_bmff(path)
+        .await
+        .unwrap_or(false)
+    {
+        return true;
+    }
+    match tokio::fs::File::open(path).await {
+        Ok(mut file) => {
+            use tokio::io::AsyncReadExt;
+            let mut header = [0_u8; 16];
+            let Ok(n) = file.read(&mut header).await else {
+                return false;
+            };
+            looks_like_image_header(&header[..n])
+        }
+        Err(_) => false,
+    }
+}
+
+fn looks_like_image_header(header: &[u8]) -> bool {
+    header.starts_with(&[0xff, 0xd8, 0xff]) // JPEG
+        || header.starts_with(&[0x89, b'P', b'N', b'G', b'\r', b'\n', 0x1a, b'\n']) // PNG
+        || header.starts_with(b"GIF87a")
+        || header.starts_with(b"GIF89a")
+        || (header.len() >= 12 && header.starts_with(b"RIFF") && &header[8..12] == b"WEBP")
+}
+
 /// Infers a safe extension from the media URL, falling back to `bin`.
 ///
 /// WeChat Channels CDN paths are often extension-less (`…/stodownload?…`);

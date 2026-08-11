@@ -1,4 +1,4 @@
-//! Fixed-threshold download progress reporting.
+//! Percent-step download progress reporting.
 
 use std::sync::{
     Arc,
@@ -7,12 +7,12 @@ use std::sync::{
 
 use super::{DownloadProgress, ProgressCallback};
 
-const PROGRESS_THRESHOLDS: [u8; 5] = [20, 40, 60, 80, 100];
-
+/// Emit progress at every whole percent (1..=100) when total length is known.
 pub(super) struct ProgressReporter {
     callback: ProgressCallback,
     total_bytes: u64,
-    next_threshold: usize,
+    /// Next whole percent to emit (1..=100).
+    next_percent: u8,
     active: Arc<AtomicBool>,
 }
 
@@ -33,7 +33,7 @@ impl ProgressReporter {
             Some(Self {
                 callback,
                 total_bytes,
-                next_threshold: 0,
+                next_percent: 1,
                 active: Arc::clone(&active),
             }),
             Some(ProgressGuard { active }),
@@ -49,17 +49,17 @@ impl ProgressReporter {
     }
 
     fn report_crossed(&mut self, downloaded_bytes: u64, include_complete: bool) {
-        while let Some(&percent) = PROGRESS_THRESHOLDS.get(self.next_threshold) {
-            if percent == 100 && !include_complete {
-                break;
-            }
-            if u128::from(downloaded_bytes) * 100
-                < u128::from(self.total_bytes) * u128::from(percent)
-            {
-                break;
-            }
+        let reached =
+            ((u128::from(downloaded_bytes) * 100) / u128::from(self.total_bytes)).min(100) as u8;
+        let max_emit = if include_complete {
+            100
+        } else {
+            reached.min(99)
+        };
 
-            self.next_threshold += 1;
+        while self.next_percent <= max_emit {
+            let percent = self.next_percent;
+            self.next_percent = self.next_percent.saturating_add(1);
             if self.active.load(Ordering::Acquire) {
                 (self.callback)(DownloadProgress {
                     downloaded_bytes,

@@ -36,8 +36,9 @@ use self::http::{
 use self::progress::ProgressReporter;
 use self::ssrf::{normalize_allowed_hosts, resolve_public_addresses, validate_media_url};
 use self::write::{
-    WrittenMedia, create_private_file, effective_resume_offset, extension_from_content_type,
-    media_task_path, open_private_file_append, path_with_better_extension, write_chunks,
+    WrittenMedia, create_private_file, effective_resume_offset, existing_complete_download,
+    extension_from_content_type, extension_from_url, media_task_path, open_private_file_append,
+    path_with_better_extension, write_chunks,
 };
 
 const MAX_REDIRECTS: usize = 5;
@@ -83,13 +84,16 @@ pub(super) type ProgressCallback = Arc<dyn Fn(DownloadProgress) + Send + Sync + 
 
 /// A completed download stored on disk.
 ///
-/// The file is deleted on drop unless retained with [`Self::into_path`] or
-/// [`Self::keep`]. Call [`Self::cleanup`] to remove it early.
+/// Fresh downloads are deleted on drop unless retained with [`Self::into_path`]
+/// or [`Self::keep`]. Pre-existing reused files ([`Self::skipped`]) are never
+/// deleted on drop. Call [`Self::cleanup`] to remove a fresh download early.
 #[derive(Debug)]
 #[must_use = "downloaded media must be uploaded, kept, or explicitly cleaned up"]
 pub struct DownloadedMedia {
     pub path: PathBuf,
     pub bytes: u64,
+    /// `true` when a complete local file was reused instead of re-downloading.
+    pub skipped: bool,
     armed: bool,
 }
 
@@ -98,11 +102,25 @@ impl DownloadedMedia {
         Self {
             path,
             bytes,
+            skipped: false,
             armed: true,
         }
     }
 
+    /// Reuses an on-disk file; drop will not delete it.
+    pub(super) fn reused(path: PathBuf, bytes: u64) -> Self {
+        Self {
+            path,
+            bytes,
+            skipped: true,
+            armed: false,
+        }
+    }
+
     pub async fn cleanup(&self) -> Result<()> {
+        if self.skipped {
+            return Ok(());
+        }
         match tokio::fs::remove_file(&self.path).await {
             Ok(()) => Ok(()),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
@@ -139,6 +157,8 @@ pub struct MediaDownloader {
     request_identity: DownloadRequestIdentity,
     disk_write_budget: Arc<StdMutex<DiskWriteBudget>>,
     file_stem: Option<Arc<str>>,
+    /// When set (default), reuse a complete local file with the same stem.
+    skip_existing: bool,
 }
 
 #[derive(Debug, Default)]
@@ -216,6 +236,7 @@ impl MediaDownloader {
             request_identity,
             disk_write_budget: Arc::new(StdMutex::new(DiskWriteBudget::default())),
             file_stem: None,
+            skip_existing: true,
         })
     }
 
@@ -237,6 +258,16 @@ impl MediaDownloader {
         self.file_stem.as_deref()
     }
 
+    /// When `true` (default), reuse a complete local file for the same stem.
+    pub fn with_skip_existing(mut self, skip_existing: bool) -> Self {
+        self.skip_existing = skip_existing;
+        self
+    }
+
+    pub fn skip_existing(&self) -> bool {
+        self.skip_existing
+    }
+
     /// Clones this downloader with a tighter request timeout.
     pub fn with_timeout(&self, request_timeout: Duration) -> Result<Self> {
         if request_timeout.is_zero() {
@@ -249,6 +280,7 @@ impl MediaDownloader {
             request_identity: self.request_identity.clone(),
             disk_write_budget: Arc::clone(&self.disk_write_budget),
             file_stem: self.file_stem.clone(),
+            skip_existing: self.skip_existing,
         })
     }
 
@@ -300,6 +332,21 @@ impl MediaDownloader {
     where
         I: IntoIterator<Item = &'a MediaSource>,
     {
+        self.download_playable_with_progress(sources, |_| {}).await
+    }
+
+    /// Like [`Self::download_playable`], reporting whole-percent progress when
+    /// the response length is known. The callback should return promptly.
+    pub async fn download_playable_with_progress<'a, I, F>(
+        &self,
+        sources: I,
+        on_progress: F,
+    ) -> Result<DownloadedMedia>
+    where
+        I: IntoIterator<Item = &'a MediaSource>,
+        F: Fn(DownloadProgress) + Send + Sync + 'static,
+    {
+        let callback: ProgressCallback = Arc::new(on_progress);
         let span = tracing::info_span!("media.download_playable");
         async move {
             let mut last_error = None;
@@ -311,7 +358,7 @@ impl MediaDownloader {
                     has_decode_key = source.decode_key.is_some()
                 );
                 match self
-                    .download_source_with_callback(source, None, 0)
+                    .download_source_with_callback(source, Some(Arc::clone(&callback)), 0)
                     .instrument(attempt)
                     .await
                 {
@@ -343,7 +390,7 @@ impl MediaDownloader {
         .await
     }
 
-    /// Downloads one source and reports known-length progress at 20% intervals.
+    /// Downloads one source and reports whole-percent progress when length is known.
     ///
     /// The synchronous callback should return promptly.
     pub async fn download_with_progress<F>(
@@ -385,6 +432,25 @@ impl MediaDownloader {
         // Reuse one path across retries so unencrypted downloads can resume.
         // Encrypted prefixes must restart from byte zero.
         // Create the workspace only after URL/host validation succeeds (in stream_response).
+        let preferred_ext = extension_from_url(url);
+        if self.skip_existing
+            && let Some((existing, bytes)) = existing_complete_download(
+                self.workspace_dir.as_path(),
+                self.file_stem.as_deref(),
+                sequence,
+                preferred_ext,
+                size_hint,
+            )
+            .await
+        {
+            tracing::info!(
+                path = %existing.display(),
+                bytes,
+                "reusing complete local media file"
+            );
+            return Ok(DownloadedMedia::reused(existing, bytes));
+        }
+
         let path = media_task_path(
             self.workspace_dir.as_path(),
             url,
