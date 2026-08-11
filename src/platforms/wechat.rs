@@ -16,6 +16,7 @@ use uuid::Uuid;
 use crate::{
     Error, Result,
     model::{MediaSource, MediaSourceKind, REVIEWED_WECHAT_MEDIA_HOSTS, ResolvedPost, VideoCodec},
+    platforms::PlatformResolver,
 };
 
 const PARSE_ENDPOINT: &str = "https://yuanbao.tencent.com/api/weixin/get_parse_result";
@@ -257,6 +258,24 @@ impl WechatResolver {
             };
         }
         Ok(value)
+    }
+}
+
+impl PlatformResolver for WechatResolver {
+    fn platform_id(&self) -> &'static str {
+        "wechat_channels"
+    }
+
+    fn extract_share_url(&self, input: &str) -> Result<Url> {
+        extract_share_url(input)
+    }
+
+    async fn resolve_text(&self, input: &str) -> Result<ResolvedPost> {
+        WechatResolver::resolve_text(self, input).await
+    }
+
+    async fn resolve_url(&self, url: &Url) -> Result<ResolvedPost> {
+        WechatResolver::resolve_url(self, url).await
     }
 }
 
