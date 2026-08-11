@@ -5,6 +5,7 @@ mod commands;
 mod config;
 mod output;
 mod sources;
+mod ui;
 
 use std::process::ExitCode;
 
@@ -37,8 +38,9 @@ fn main() -> ExitCode {
                 prefer,
                 source,
                 first_only,
+                force,
                 json,
-            } => commands::download(&input, output, prefer, source, first_only, json).await,
+            } => commands::download(&input, output, prefer, source, first_only, force, json).await,
             Commands::Platforms { check } => commands::platforms(check),
             Commands::Doctor => commands::doctor(),
         }
@@ -47,7 +49,7 @@ fn main() -> ExitCode {
     match result {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
-            eprintln!("error: {error}");
+            ui::err("Error", error.to_string());
             ExitCode::FAILURE
         }
     }

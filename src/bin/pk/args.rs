@@ -53,6 +53,9 @@ pub enum Commands {
         /// Download only the first image in an image set.
         #[arg(long)]
         first_only: bool,
+        /// Re-download even when a complete local file already exists.
+        #[arg(long)]
+        force: bool,
         /// Emit the result as JSON.
         #[arg(long)]
         json: bool,
