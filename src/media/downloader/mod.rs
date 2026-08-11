@@ -36,7 +36,8 @@ use self::http::{
 use self::progress::ProgressReporter;
 use self::ssrf::{normalize_allowed_hosts, resolve_public_addresses, validate_media_url};
 use self::write::{
-    WrittenMedia, create_private_file, open_private_file_append, random_task_path, write_chunks,
+    WrittenMedia, create_private_file, effective_resume_offset, open_private_file_append,
+    random_task_path, write_chunks,
 };
 
 const MAX_REDIRECTS: usize = 5;
@@ -80,15 +81,25 @@ pub struct DownloadProgress {
 
 pub(super) type ProgressCallback = Arc<dyn Fn(DownloadProgress) + Send + Sync + 'static>;
 
-/// Finished download; call [`DownloadedMedia::cleanup`] when done.
+/// Finished download; call [`DownloadedMedia::cleanup`] when done, or
+/// [`DownloadedMedia::into_path`] / [`DownloadedMedia::keep`] to retain the file.
 #[derive(Debug)]
-#[must_use = "downloaded media must be uploaded or explicitly cleaned up"]
+#[must_use = "downloaded media must be uploaded, kept, or explicitly cleaned up"]
 pub struct DownloadedMedia {
     pub path: PathBuf,
     pub bytes: u64,
+    armed: bool,
 }
 
 impl DownloadedMedia {
+    pub(super) fn new(path: PathBuf, bytes: u64) -> Self {
+        Self {
+            path,
+            bytes,
+            armed: true,
+        }
+    }
+
     pub async fn cleanup(&self) -> Result<()> {
         match tokio::fs::remove_file(&self.path).await {
             Ok(()) => Ok(()),
@@ -96,11 +107,24 @@ impl DownloadedMedia {
             Err(error) => Err(Error::Io(error)),
         }
     }
+
+    /// Keep the file on disk and return ownership of the path (disarms Drop cleanup).
+    pub fn into_path(mut self) -> PathBuf {
+        self.armed = false;
+        std::mem::take(&mut self.path)
+    }
+
+    /// Alias for [`Self::into_path`].
+    pub fn keep(self) -> PathBuf {
+        self.into_path()
+    }
 }
 
 impl Drop for DownloadedMedia {
     fn drop(&mut self) {
-        let _ = std::fs::remove_file(&self.path);
+        if self.armed {
+            let _ = std::fs::remove_file(&self.path);
+        }
     }
 }
 
@@ -235,12 +259,41 @@ impl MediaDownloader {
     }
 
     pub async fn download(&self, source: &MediaSource) -> Result<DownloadedMedia> {
-        self.download_url_with_callback(&source.url, source.size_hint, None, None)
+        self.download_url_with_callback(&source.url, source.size_hint, None, source.decode_key)
             .await
     }
 
     pub async fn download_url(&self, url: &Url) -> Result<DownloadedMedia> {
         self.download_url_with_callback(url, None, None, None).await
+    }
+
+    /// Download every source to its own file (image sets / multi-item posts).
+    /// On partial failure, already-written files are cleaned up.
+    pub async fn download_all<'a, I>(&self, sources: I) -> Result<Vec<DownloadedMedia>>
+    where
+        I: IntoIterator<Item = &'a MediaSource>,
+    {
+        let span = tracing::info_span!("media.download_all");
+        async move {
+            let mut saved = Vec::new();
+            for source in sources {
+                match self.download(source).await {
+                    Ok(media) => saved.push(media),
+                    Err(error) => {
+                        for media in saved.drain(..) {
+                            let _ = media.cleanup().await;
+                        }
+                        return Err(error);
+                    }
+                }
+            }
+            if saved.is_empty() {
+                return Err(Error::MediaUnavailable);
+            }
+            Ok(saved)
+        }
+        .instrument(span)
+        .await
     }
 
     /// Try each source in order. When `decode_key` is set, XOR the first 128 KiB
@@ -327,7 +380,7 @@ impl MediaDownloader {
         tokio::fs::create_dir_all(self.workspace_dir.as_path())
             .await
             .map_err(|_| Error::Storage(self.workspace_dir.as_ref().clone()))?;
-        let path = random_task_path(self.workspace_dir.as_path());
+        let path = random_task_path(self.workspace_dir.as_path(), url);
         let path = Arc::new(path);
         let allow_resume = decode_key.is_none();
 
@@ -399,12 +452,18 @@ impl MediaDownloader {
 
             let response = self.follow_redirects(url.clone(), resume_from).await?;
             let status = response.status();
-            if resume_from > 0 && status == reqwest::StatusCode::OK {
+            let Some(next_resume) = effective_resume_offset(resume_from, status) else {
+                // Non-resumable error status (4xx/5xx, etc.).
+                return check_response_status(status)
+                    .map(|()| unreachable!("successful status should yield a resume offset"));
+            };
+            if resume_from > 0 && next_resume == 0 {
                 // Server ignored Range — restart from zero once.
                 let _ = tokio::fs::remove_file(&path).await;
                 resume_from = 0;
                 continue;
             }
+            resume_from = next_resume;
             // 206 Partial Content is success when resuming; otherwise require 200.
             if !(resume_from > 0 && status == reqwest::StatusCode::PARTIAL_CONTENT) {
                 check_response_status(status)?;

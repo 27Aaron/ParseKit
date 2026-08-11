@@ -27,11 +27,15 @@ cargo run -p pk -- platforms
 ```bash
 cp .env.example .env.local   # 填 YUANBAO_COOKIE 等
 cargo run -p pk -- platforms
+cargo run -p pk -- platforms --check
+cargo run -p pk -- doctor
 cargo run -p pk -- resolve "分享文案或链接"
 cargo run -p pk -- download "分享文案或链接" -o ./downloads
 # 多画质：默认最高；--source 0 指定下标；--prefer smallest 优先小文件
 cargo run -p pk -- download "…" --source 1
 cargo run -p pk -- download "…" --prefer smallest
+# 图集默认下全部图片；--first-only 只要第一张
+cargo run -p pk -v -- download "…"   # verbose tracing
 ```
 
 环境变量见 `.env.example`。

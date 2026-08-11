@@ -18,7 +18,8 @@ use uuid::Uuid;
 use super::http::check_response_status;
 use super::ssrf::{is_forbidden_ip, normalize_allowed_hosts, validate_media_url};
 use super::write::{
-    MIN_FREE_DISK_BYTES, PendingFile, disk_space_is_sufficient, random_task_path, write_chunks,
+    MIN_FREE_DISK_BYTES, PendingFile, disk_space_is_sufficient, effective_resume_offset,
+    extension_from_url, random_task_path, write_chunks,
 };
 use super::*;
 use crate::platforms;
@@ -158,7 +159,8 @@ async fn retries_only_transient_download_failures() {
     .await
     .unwrap_err();
     assert!(matches!(error, Error::RateLimited));
-    assert_eq!(rate_limited_attempts.load(Ordering::SeqCst), 1);
+    // RateLimited is now retried with the same fixed delay schedule.
+    assert_eq!(rate_limited_attempts.load(Ordering::SeqCst), 3);
 }
 
 #[tokio::test]
@@ -207,7 +209,10 @@ fn classifies_only_temporary_http_statuses_for_retry() {
 
 #[test]
 fn uses_a_canonical_hyphenated_uuid_for_temporary_video_names() {
-    let path = random_task_path(Path::new("media"));
+    let path = random_task_path(
+        Path::new("media"),
+        &Url::parse("https://cdn.example/v.mp4").unwrap(),
+    );
     let file_name = path.file_name().unwrap().to_str().unwrap();
     let uuid = file_name.strip_suffix(".mp4").unwrap();
 
@@ -377,10 +382,7 @@ async fn cleanup_is_idempotent() {
     std::fs::create_dir_all(&directory).unwrap();
     let path = directory.join("media");
     std::fs::write(&path, b"test").unwrap();
-    let media = DownloadedMedia {
-        path: path.clone(),
-        bytes: 4,
-    };
+    let media = DownloadedMedia::new(path.clone(), 4);
 
     media.cleanup().await.unwrap();
     media.cleanup().await.unwrap();
@@ -485,4 +487,46 @@ fn progress_guard_suppresses_events_after_cancellation() {
     reporter.as_mut().unwrap().report_complete(100);
 
     assert!(events.lock().unwrap().is_empty());
+}
+
+#[test]
+fn effective_resume_offset_handles_partial_and_full_ok() {
+    use reqwest::StatusCode;
+    assert_eq!(effective_resume_offset(0, StatusCode::OK), Some(0));
+    assert_eq!(
+        effective_resume_offset(100, StatusCode::PARTIAL_CONTENT),
+        Some(100)
+    );
+    assert_eq!(effective_resume_offset(100, StatusCode::OK), Some(0));
+    assert_eq!(effective_resume_offset(100, StatusCode::NOT_FOUND), None);
+}
+
+#[test]
+fn extension_from_url_guesses_common_types() {
+    assert_eq!(
+        extension_from_url(&Url::parse("https://x/a/b.mp4?x=1").unwrap()),
+        "mp4"
+    );
+    assert_eq!(
+        extension_from_url(&Url::parse("https://p3.douyinpic.com/img.jpeg").unwrap()),
+        "jpg"
+    );
+    assert_eq!(
+        extension_from_url(&Url::parse("https://x/play/?video_id=1").unwrap()),
+        "mp4"
+    );
+}
+
+#[test]
+fn into_path_disarms_drop_cleanup() {
+    let dir = std::env::temp_dir().join(format!("pk-keep-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("keep.bin");
+    std::fs::write(&path, b"hi").unwrap();
+    let media = DownloadedMedia::new(path.clone(), 2);
+    let kept = media.into_path();
+    assert_eq!(kept, path);
+    assert!(path.exists());
+    std::fs::remove_file(&path).unwrap();
+    std::fs::remove_dir(&dir).unwrap();
 }
