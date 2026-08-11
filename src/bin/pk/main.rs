@@ -4,6 +4,7 @@ mod args;
 mod commands;
 mod config;
 mod output;
+mod select;
 mod sources;
 mod ui;
 

@@ -279,7 +279,17 @@ impl MediaDownloader {
     }
 
     pub async fn download(&self, source: &MediaSource) -> Result<DownloadedMedia> {
-        self.download_source_with_callback(source, None, 0).await
+        self.download_indexed(source, 0).await
+    }
+
+    /// Downloads one source using a multi-file sequence suffix (`_1`, `_2`, …).
+    pub async fn download_indexed(
+        &self,
+        source: &MediaSource,
+        sequence: u32,
+    ) -> Result<DownloadedMedia> {
+        self.download_source_with_callback(source, None, sequence)
+            .await
     }
 
     pub async fn download_url(&self, url: &Url) -> Result<DownloadedMedia> {
@@ -395,7 +405,21 @@ impl MediaDownloader {
     where
         F: Fn(DownloadProgress) + Send + Sync + 'static,
     {
-        self.download_source_with_callback(source, Some(Arc::new(on_progress)), 0)
+        self.download_indexed_with_progress(source, 0, on_progress)
+            .await
+    }
+
+    /// Like [`Self::download_with_progress`] with a multi-file sequence suffix.
+    pub async fn download_indexed_with_progress<F>(
+        &self,
+        source: &MediaSource,
+        sequence: u32,
+        on_progress: F,
+    ) -> Result<DownloadedMedia>
+    where
+        F: Fn(DownloadProgress) + Send + Sync + 'static,
+    {
+        self.download_source_with_callback(source, Some(Arc::new(on_progress)), sequence)
             .await
     }
 
