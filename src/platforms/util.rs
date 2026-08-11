@@ -14,34 +14,22 @@ pub fn map_network_error(error: &reqwest::Error, timeout_msg: &str, fail_msg: &s
 }
 
 pub fn default_title_for_platform(platform: PlatformId) -> &'static str {
-    match platform {
-        PlatformId::WechatChannels => "微信视频号视频",
-        PlatformId::Douyin => "抖音视频",
-        PlatformId::Bilibili => "哔哩哔哩视频",
-    }
+    platform.default_title()
 }
 
 pub fn display_title_for_post(platform: PlatformId, title: Option<&str>) -> String {
-    title
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .unwrap_or_else(|| default_title_for_platform(platform))
-        .chars()
-        .take(180)
-        .collect()
+    crate::model::format_title(title, default_title_for_platform(platform))
 }
 
 pub fn display_title(post: &crate::ResolvedPost) -> String {
-    display_title_for_post(post.platform, post.title.as_deref())
+    post.display_title()
 }
 
 pub async fn read_body_limited(
-    response: reqwest::Response,
+    mut response: reqwest::Response,
     max_bytes: usize,
     map_error: impl Fn(&reqwest::Error) -> Error,
 ) -> Result<Vec<u8>> {
-    use futures_util::StreamExt;
-
     if response
         .content_length()
         .is_some_and(|length| length > max_bytes as u64)
@@ -50,9 +38,7 @@ pub async fn read_body_limited(
     }
 
     let mut bytes = Vec::new();
-    let mut stream = response.bytes_stream();
-    while let Some(chunk) = stream.next().await {
-        let chunk = chunk.map_err(|error| map_error(&error))?;
+    while let Some(chunk) = response.chunk().await.map_err(|error| map_error(&error))? {
         let next_len = bytes
             .len()
             .checked_add(chunk.len())

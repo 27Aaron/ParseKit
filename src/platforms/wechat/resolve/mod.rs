@@ -7,9 +7,11 @@ mod util;
 #[cfg(test)]
 mod tests;
 
-use std::{sync::Arc, time::Duration};
+use std::{
+    sync::Arc,
+    time::{Duration, SystemTime, UNIX_EPOCH},
+};
 
-use chrono::Utc;
 use reqwest::{
     Client,
     header::{ACCEPT, ACCEPT_LANGUAGE, CONTENT_TYPE, COOKIE, ORIGIN, REFERER, USER_AGENT},
@@ -130,13 +132,18 @@ impl WechatResolver {
     pub async fn resolve_text(&self, input: &str) -> Result<ResolvedPost> {
         let url = extract_share_url(input)?;
         let normalized = normalize_share_url(&url)?;
-        tokio::time::timeout(self.timeout, self.resolve_normalized(normalized))
-            .await
-            .map_err(|_| Error::Network("视频号解析总超时".into()))?
+        self.resolve_share_url(normalized).await
     }
 
     pub async fn resolve_url(&self, url: &Url) -> Result<ResolvedPost> {
         let normalized = normalize_share_url(url)?;
+        self.resolve_share_url(normalized).await
+    }
+
+    async fn resolve_share_url(
+        &self,
+        normalized: self::share::NormalizedShareUrl,
+    ) -> Result<ResolvedPost> {
         tokio::time::timeout(self.timeout, self.resolve_normalized(normalized))
             .await
             .map_err(|_| Error::Network("视频号解析总超时".into()))?
@@ -230,9 +237,13 @@ impl WechatResolver {
     }
 
     async fn request_feed(&self, export_id: &str, general_token: &str) -> Result<Value> {
+        let timestamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_err(|_| Error::Config("系统时间早于 Unix epoch".into()))?
+            .as_secs();
         let rid = format!(
             "{:x}-{}",
-            Utc::now().timestamp(),
+            timestamp,
             &Uuid::new_v4().simple().to_string()[..8]
         );
         let mut endpoint = self.feed_endpoint.clone();

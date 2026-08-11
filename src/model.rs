@@ -5,6 +5,16 @@ use url::Url;
 
 use crate::{Error, Result};
 
+pub(crate) fn format_title(title: Option<&str>, fallback: &str) -> String {
+    title
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or(fallback)
+        .chars()
+        .take(180)
+        .collect()
+}
+
 /// Stable platform identifier (serde uses the public string tags).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum PlatformId {
@@ -30,6 +40,14 @@ impl PlatformId {
             Self::WechatChannels => "微信视频号",
             Self::Douyin => "抖音",
             Self::Bilibili => "哔哩哔哩",
+        }
+    }
+
+    pub const fn default_title(self) -> &'static str {
+        match self {
+            Self::WechatChannels => "微信视频号视频",
+            Self::Douyin => "抖音视频",
+            Self::Bilibili => "哔哩哔哩视频",
         }
     }
 
@@ -120,15 +138,15 @@ impl MediaItem {
     }
 
     pub fn sources(&self) -> Vec<&MediaSource> {
-        match self {
-            Self::Video { primary, fallbacks } => {
-                let mut list = Vec::with_capacity(1 + fallbacks.len());
-                list.push(primary);
-                list.extend(fallbacks.iter());
-                list
-            }
-            Self::Image { source } | Self::Audio { source } => vec![source],
-        }
+        self.iter_sources().collect()
+    }
+
+    fn iter_sources(&self) -> impl Iterator<Item = &MediaSource> {
+        let (primary, fallbacks) = match self {
+            Self::Video { primary, fallbacks } => (primary, fallbacks.as_slice()),
+            Self::Image { source } | Self::Audio { source } => (source, &[][..]),
+        };
+        std::iter::once(primary).chain(fallbacks)
     }
 }
 
@@ -238,7 +256,7 @@ impl ResolvedPost {
 
     /// All media sources in play order (primary video first, then fallbacks / other items).
     pub fn media_sources(&self) -> impl Iterator<Item = &MediaSource> {
-        self.media.iter().flat_map(MediaItem::sources)
+        self.media.iter().flat_map(MediaItem::iter_sources)
     }
 
     pub fn primary_video(&self) -> Option<&MediaSource> {
@@ -260,18 +278,11 @@ impl ResolvedPost {
     }
 
     pub fn display_title(&self) -> String {
-        self.display_title_or("视频")
+        self.display_title_or(self.platform.default_title())
     }
 
     pub fn display_title_or(&self, fallback: &str) -> String {
-        self.title
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .unwrap_or(fallback)
-            .chars()
-            .take(180)
-            .collect()
+        format_title(self.title.as_deref(), fallback)
     }
 }
 
@@ -317,5 +328,35 @@ mod tests {
             post.require_primary_video().unwrap().url.as_str(),
             primary.url.as_str()
         );
+    }
+
+    #[test]
+    fn image_sets_require_at_least_one_source() {
+        let result = ResolvedPost::new_image_set(
+            PlatformId::Douyin,
+            "1",
+            Url::parse("https://www.douyin.com/note/1").unwrap(),
+            None,
+            None,
+            Vec::new(),
+        );
+        assert!(matches!(result, Err(Error::MediaUnavailable)));
+    }
+
+    #[test]
+    fn display_title_uses_platform_default_and_unicode_safe_limit() {
+        let mut post = ResolvedPost::new_video(
+            PlatformId::Bilibili,
+            "1",
+            Url::parse("https://www.bilibili.com/video/BV1234").unwrap(),
+            Some("  ".into()),
+            None,
+            sample_source("a.mp4"),
+            Vec::new(),
+        );
+        assert_eq!(post.display_title(), "哔哩哔哩视频");
+
+        post.title = Some("界".repeat(200));
+        assert_eq!(post.display_title().chars().count(), 180);
     }
 }

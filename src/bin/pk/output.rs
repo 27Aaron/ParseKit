@@ -1,14 +1,11 @@
 //! Human and JSON output.
 
-use parse_kit::{
-    Error, MediaSource, MediaSourceKind, ResolvedPost, Result, VideoCodec,
-    platforms::util::display_title,
-};
+use parse_kit::{Error, MediaSource, MediaSourceKind, ResolvedPost, Result, VideoCodec};
 
 pub fn print_post_summary(post: &ResolvedPost) {
     println!("platform:  {}", post.platform);
     println!("post_id:   {}", post.post_id);
-    println!("title:     {}", display_title(post));
+    println!("title:     {}", post.display_title());
     println!("kind:      {:?}", post.kind);
     println!("canonical: {}", post.canonical_url);
     println!("sources:");
@@ -56,7 +53,7 @@ pub fn print_post_json(post: &ResolvedPost) -> Result<()> {
     let value = serde_json::json!({
         "platform": post.platform,
         "post_id": post.post_id,
-        "title": display_title(post),
+        "title": post.display_title(),
         "kind": post.kind,
         "canonical_url": post.canonical_url.as_str(),
         "cover_url": post.cover_url.as_ref().map(|u| u.as_str().to_owned()),

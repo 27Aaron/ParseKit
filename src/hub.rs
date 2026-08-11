@@ -15,7 +15,7 @@ pub struct ParseKit {
     platforms: Vec<Platform>,
 }
 
-/// Kit builder. [`ParseKit::new`] registers WeChat then Douyin.
+/// Kit builder. [`ParseKit::new`] registers WeChat, Douyin, then Bilibili.
 #[derive(Debug, Default)]
 pub struct ParseKitBuilder {
     platforms: Vec<Platform>,
@@ -60,7 +60,7 @@ impl ParseKitBuilder {
 }
 
 impl ParseKit {
-    /// WeChat + Douyin. Custom sets: [`ParseKit::builder`].
+    /// WeChat + Douyin + Bilibili. Custom sets: [`ParseKit::builder`].
     pub fn new(wechat_yuanbao_cookie: impl Into<String>) -> Result<Self> {
         Self::builder()
             .wechat(wechat_yuanbao_cookie)?
@@ -80,20 +80,12 @@ impl ParseKit {
     pub async fn resolve_text(&self, input: &str) -> Result<ResolvedPost> {
         let span = tracing::info_span!("parse_kit.resolve_text");
         async move {
-            for platform in &self.platforms {
-                match platform.extract_share_url(input) {
-                    Ok(_) => {
-                        let id = platform.platform_id().as_str();
-                        return platform
-                            .resolve_text(input)
-                            .instrument(tracing::info_span!("platform.resolve", platform = id))
-                            .await;
-                    }
-                    Err(Error::UnsupportedUrl) => {}
-                    Err(error) => return Err(error),
-                }
-            }
-            Err(Error::UnsupportedUrl)
+            let platform = self.matching_platform(input)?;
+            let id = platform.platform_id().as_str();
+            platform
+                .resolve_text(input)
+                .instrument(tracing::info_span!("platform.resolve", platform = id))
+                .await
         }
         .instrument(span)
         .await
@@ -102,23 +94,26 @@ impl ParseKit {
     pub async fn resolve_url(&self, url: &Url) -> Result<ResolvedPost> {
         let span = tracing::info_span!("parse_kit.resolve_url");
         async move {
-            for platform in &self.platforms {
-                match platform.extract_share_url(url.as_str()) {
-                    Ok(_) => {
-                        let id = platform.platform_id().as_str();
-                        return platform
-                            .resolve_url(url)
-                            .instrument(tracing::info_span!("platform.resolve", platform = id))
-                            .await;
-                    }
-                    Err(Error::UnsupportedUrl) => {}
-                    Err(error) => return Err(error),
-                }
-            }
-            Err(Error::UnsupportedUrl)
+            let platform = self.matching_platform(url.as_str())?;
+            let id = platform.platform_id().as_str();
+            platform
+                .resolve_url(url)
+                .instrument(tracing::info_span!("platform.resolve", platform = id))
+                .await
         }
         .instrument(span)
         .await
+    }
+
+    fn matching_platform(&self, input: &str) -> Result<&Platform> {
+        for platform in &self.platforms {
+            match platform.extract_share_url(input) {
+                Ok(_) => return Ok(platform),
+                Err(Error::UnsupportedUrl) => {}
+                Err(error) => return Err(error),
+            }
+        }
+        Err(Error::UnsupportedUrl)
     }
 
     pub fn wechat(&self) -> Option<&WechatResolver> {
@@ -217,5 +212,15 @@ mod tests {
                 .iter()
                 .any(|h| { h.contains("douyin") || h.contains("snssdk") || h.starts_with('.') })
         );
+    }
+
+    #[test]
+    fn matching_platform_routes_using_registered_resolvers() {
+        let kit = ParseKit::builder().bilibili().unwrap().build().unwrap();
+        let platform = kit
+            .matching_platform("看看 http://m.bilibili.com/video/av170001?utm_source=chat")
+            .expect("Bilibili match");
+
+        assert_eq!(platform.platform_id(), crate::PlatformId::Bilibili);
     }
 }
