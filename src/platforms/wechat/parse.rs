@@ -1,4 +1,4 @@
-//! Build normalized posts from Yuanbao parse and feed responses.
+//! Map Yuanbao parse and feed responses into normalized posts.
 
 use serde_json::Value;
 use url::Url;
@@ -8,10 +8,10 @@ use crate::{
     model::{MediaSource, MediaSourceKind, ResolvedPost, VideoCodec},
 };
 
+use super::api::{ParseData, non_empty, number_at, text_at};
 use super::share::{
     NormalizedShareUrl, derive_direct_media_url, is_allowed_media_url, query_value,
 };
-use super::util::{ParseData, non_empty, number_at, text_at};
 
 pub(super) fn build_post(
     normalized: NormalizedShareUrl,

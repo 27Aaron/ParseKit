@@ -59,16 +59,20 @@ pub struct DownloadRequestIdentity {
 }
 
 impl DownloadRequestIdentity {
+    pub fn for_platform(platform_id: crate::PlatformId) -> Self {
+        platforms::platform_spec(platform_id).download_identity()
+    }
+
     pub fn wechat() -> Self {
-        platforms::wechat::download_identity()
+        Self::for_platform(crate::PlatformId::Wechat)
     }
 
     pub fn douyin() -> Self {
-        platforms::douyin::download_identity()
+        Self::for_platform(crate::PlatformId::Douyin)
     }
 
     pub fn bilibili() -> Self {
-        platforms::bilibili::download_identity()
+        Self::for_platform(crate::PlatformId::Bilibili)
     }
 }
 
@@ -181,41 +185,28 @@ impl MediaDownloader {
     }
 
     pub fn for_wechat(workspace_dir: impl Into<PathBuf>) -> Result<Self> {
-        Self::with_options(
-            workspace_dir,
-            platforms::wechat::REVIEWED_MEDIA_HOSTS.iter().copied(),
-            REQUEST_TIMEOUT,
-            platforms::wechat::download_identity(),
-        )
+        Self::for_platform(crate::PlatformId::Wechat, workspace_dir)
     }
 
     pub fn for_douyin(workspace_dir: impl Into<PathBuf>) -> Result<Self> {
-        Self::with_options(
-            workspace_dir,
-            platforms::douyin::REVIEWED_MEDIA_HOSTS.iter().copied(),
-            REQUEST_TIMEOUT,
-            platforms::douyin::download_identity(),
-        )
+        Self::for_platform(crate::PlatformId::Douyin, workspace_dir)
     }
 
     pub fn for_bilibili(workspace_dir: impl Into<PathBuf>) -> Result<Self> {
-        Self::with_options(
-            workspace_dir,
-            platforms::bilibili::REVIEWED_MEDIA_HOSTS.iter().copied(),
-            REQUEST_TIMEOUT,
-            platforms::bilibili::download_identity(),
-        )
+        Self::for_platform(crate::PlatformId::Bilibili, workspace_dir)
     }
 
     pub fn for_platform(
         platform_id: crate::PlatformId,
         workspace_dir: impl Into<PathBuf>,
     ) -> Result<Self> {
-        match platform_id {
-            crate::PlatformId::Wechat => Self::for_wechat(workspace_dir),
-            crate::PlatformId::Douyin => Self::for_douyin(workspace_dir),
-            crate::PlatformId::Bilibili => Self::for_bilibili(workspace_dir),
-        }
+        let spec = platforms::platform_spec(platform_id);
+        Self::with_options(
+            workspace_dir,
+            spec.reviewed_media_hosts().iter().copied(),
+            REQUEST_TIMEOUT,
+            spec.download_identity(),
+        )
     }
 
     pub fn with_options(

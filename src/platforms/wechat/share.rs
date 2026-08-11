@@ -1,12 +1,13 @@
-//! Extract and normalize share URLs, then derive media URLs.
+//! Extract and normalize WeChat share URLs, then derive media URLs.
 
 use regex::Regex;
 use url::Url;
 
 use crate::{
     Error, Result, media::host::is_reviewed_https_url, platforms::util::trim_url_candidate,
-    platforms::wechat::hosts::REVIEWED_MEDIA_HOSTS,
 };
+
+use super::hosts::REVIEWED_MEDIA_HOSTS;
 
 pub(super) struct NormalizedShareUrl {
     pub(super) share_id: String,

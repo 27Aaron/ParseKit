@@ -29,4 +29,7 @@ pub use model::{
 pub use platforms::bilibili::REVIEWED_BILIBILI_MEDIA_HOSTS;
 pub use platforms::douyin::REVIEWED_DOUYIN_MEDIA_HOSTS;
 pub use platforms::wechat::REVIEWED_WECHAT_MEDIA_HOSTS;
-pub use platforms::{BilibiliResolver, DouyinResolver, Platform, PlatformResolver, WechatResolver};
+pub use platforms::{
+    BilibiliResolver, DouyinResolver, PLATFORM_SPECS, Platform, PlatformResolver, PlatformSpec,
+    WechatResolver, platform_spec,
+};

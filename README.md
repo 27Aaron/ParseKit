@@ -13,6 +13,8 @@ just download '分享链接'
 
 微信视频号需要 `YUANBAO_COOKIE`（见 `.env.example`）。
 
+新增平台时使用[统一适配器模板](./docs/adding-platform.md)。
+
 ## License
 
 [MIT](./LICENSE)

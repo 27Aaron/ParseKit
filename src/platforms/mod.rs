@@ -1,19 +1,23 @@
 //! Resolver implementations for supported platforms.
 //!
-//! To add a platform:
+//! Every platform follows the same adapter layout:
 //!
-//! 1. Implement [`PlatformResolver`] under `platforms/<name>/`.
-//! 2. Add a [`Platform`] variant and delegate its methods.
-//! 3. Register it with [`crate::ParseKitBuilder`] and, when applicable, [`STATELESS_EXTRACTORS`].
-//! 4. Review its media hosts and update [`crate::media::MediaDownloader::for_platform`].
-//! 5. Add unit and fixture tests; keep live tests ignored by default.
-//! 6. Update the platform table in the README.
+//! - `mod.rs`: facade and [`PlatformSpec`] declaration;
+//! - `resolver.rs`: HTTP orchestration and [`PlatformResolver`] implementation;
+//! - `share.rs`: share-text extraction and URL normalization;
+//! - `parse.rs`: upstream payload mapping into [`ResolvedPost`];
+//! - `hosts.rs`: reviewed download hosts and request identity;
+//! - `tests.rs`: fixture-backed unit tests.
+//!
+//! Platform-only concerns may use extra files (for example WeChat's `api.rs`
+//! and `decrypt.rs`). See `docs/adding-platform.md` for the registration
+//! checklist and a copyable skeleton.
 
 use std::future::Future;
 
 use url::Url;
 
-use crate::{Error, PlatformId, ResolvedPost, Result};
+use crate::{Error, PlatformId, ResolvedPost, Result, media::DownloadRequestIdentity};
 
 pub mod bilibili;
 pub mod douyin;
@@ -24,20 +28,104 @@ pub use bilibili::BilibiliResolver;
 pub use douyin::DouyinResolver;
 pub use wechat::WechatResolver;
 
-/// Share-text extractors in deterministic matching order.
-pub const STATELESS_EXTRACTORS: &[fn(&str) -> Result<Url>] = &[
-    wechat::extract_share_url,
-    douyin::extract_share_url,
-    bilibili::extract_share_url,
-];
+/// Static metadata and hooks shared by routing and media downloading.
+///
+/// Each platform declares exactly one spec in its `mod.rs`. This keeps URL
+/// matching, CLI capability text, and download policy in one registration
+/// record instead of maintaining separate platform lists.
+#[derive(Clone, Copy)]
+pub struct PlatformSpec {
+    id: PlatformId,
+    capability_note: &'static str,
+    extract_share_url: fn(&str) -> Result<Url>,
+    reviewed_media_hosts: &'static [&'static str],
+    download_identity: fn() -> DownloadRequestIdentity,
+}
 
-pub trait PlatformResolver {
-    fn platform_id(&self) -> PlatformId;
+impl PlatformSpec {
+    pub const fn new(
+        id: PlatformId,
+        capability_note: &'static str,
+        extract_share_url: fn(&str) -> Result<Url>,
+        reviewed_media_hosts: &'static [&'static str],
+        download_identity: fn() -> DownloadRequestIdentity,
+    ) -> Self {
+        Self {
+            id,
+            capability_note,
+            extract_share_url,
+            reviewed_media_hosts,
+            download_identity,
+        }
+    }
+
+    pub const fn id(self) -> PlatformId {
+        self.id
+    }
+
+    pub const fn capability_note(self) -> &'static str {
+        self.capability_note
+    }
+
+    pub fn extract_share_url(self, input: &str) -> Result<Url> {
+        (self.extract_share_url)(input)
+    }
+
+    pub const fn reviewed_media_hosts(self) -> &'static [&'static str] {
+        self.reviewed_media_hosts
+    }
+
+    pub fn download_identity(self) -> DownloadRequestIdentity {
+        (self.download_identity)()
+    }
+}
+
+impl std::fmt::Debug for PlatformSpec {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("PlatformSpec")
+            .field("id", &self.id)
+            .field("capability_note", &self.capability_note)
+            .field("reviewed_media_hosts", &self.reviewed_media_hosts)
+            .finish_non_exhaustive()
+    }
+}
+
+/// Platform specs in deterministic share-text matching order.
+pub const PLATFORM_SPECS: &[&PlatformSpec] = &[&wechat::SPEC, &douyin::SPEC, &bilibili::SPEC];
+
+/// Returns the registered spec for a stable platform id.
+pub fn platform_spec(id: PlatformId) -> &'static PlatformSpec {
+    PLATFORM_SPECS
+        .iter()
+        .copied()
+        .find(|spec| spec.id() == id)
+        .expect("every PlatformId must have a registered PlatformSpec")
+}
+
+/// Contract implemented by every platform resolver.
+///
+/// Implementors provide their spec and URL-resolution operation. The shared
+/// defaults derive platform identity, extraction, and text resolution from
+/// those two pieces.
+pub trait PlatformResolver: Sync {
+    fn spec(&self) -> &'static PlatformSpec;
+
+    fn platform_id(&self) -> PlatformId {
+        self.spec().id()
+    }
 
     /// Returns [`Error::UnsupportedUrl`] when the input belongs to another platform.
-    fn extract_share_url(&self, input: &str) -> Result<Url>;
+    fn extract_share_url(&self, input: &str) -> Result<Url> {
+        self.spec().extract_share_url(input)
+    }
 
-    fn resolve_text(&self, input: &str) -> impl Future<Output = Result<ResolvedPost>> + Send;
+    fn resolve_text(&self, input: &str) -> impl Future<Output = Result<ResolvedPost>> + Send {
+        async move {
+            let url = self.extract_share_url(input)?;
+            self.resolve_url(&url).await
+        }
+    }
 
     fn resolve_url(&self, url: &Url) -> impl Future<Output = Result<ResolvedPost>> + Send;
 }
@@ -50,12 +138,16 @@ pub enum Platform {
 }
 
 impl Platform {
-    pub fn platform_id(&self) -> PlatformId {
+    pub fn spec(&self) -> &'static PlatformSpec {
         match self {
-            Self::Wechat(resolver) => resolver.platform_id(),
-            Self::Douyin(resolver) => resolver.platform_id(),
-            Self::Bilibili(resolver) => resolver.platform_id(),
+            Self::Wechat(resolver) => resolver.spec(),
+            Self::Douyin(resolver) => resolver.spec(),
+            Self::Bilibili(resolver) => resolver.spec(),
         }
+    }
+
+    pub fn platform_id(&self) -> PlatformId {
+        self.spec().id()
     }
 
     /// Returns the label shown by the CLI and logs.
@@ -65,19 +157,11 @@ impl Platform {
 
     /// Describes credentials or other resolver constraints.
     pub fn capability_note(&self) -> &'static str {
-        match self {
-            Self::Wechat(_) => "needs YUANBAO_COOKIE",
-            Self::Douyin(_) => "public share page",
-            Self::Bilibili(_) => "public video page",
-        }
+        self.spec().capability_note()
     }
 
     pub fn extract_share_url(&self, input: &str) -> Result<Url> {
-        match self {
-            Self::Wechat(resolver) => PlatformResolver::extract_share_url(resolver, input),
-            Self::Douyin(resolver) => PlatformResolver::extract_share_url(resolver, input),
-            Self::Bilibili(resolver) => PlatformResolver::extract_share_url(resolver, input),
-        }
+        self.spec().extract_share_url(input)
     }
 
     pub async fn resolve_text(&self, input: &str) -> Result<ResolvedPost> {
@@ -119,8 +203,8 @@ impl Platform {
 }
 
 pub fn extract_share_url(input: &str) -> Result<Url> {
-    for extract in STATELESS_EXTRACTORS {
-        match extract(input) {
+    for spec in PLATFORM_SPECS {
+        match spec.extract_share_url(input) {
             Ok(url) => return Ok(url),
             Err(Error::UnsupportedUrl) => {}
             Err(error) => return Err(error),
@@ -162,7 +246,13 @@ mod tests {
     }
 
     #[test]
-    fn default_match_order_is_wechat_douyin_bilibili() {
-        assert_eq!(STATELESS_EXTRACTORS.len(), 3);
+    fn registry_covers_every_platform_in_match_order() {
+        assert_eq!(
+            PLATFORM_SPECS
+                .iter()
+                .map(|spec| spec.id())
+                .collect::<Vec<_>>(),
+            PlatformId::ALL
+        );
     }
 }

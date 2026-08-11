@@ -1,8 +1,37 @@
 //! Common resolver utilities.
 
+use std::{future::Future, time::Duration};
+
+use reqwest::{Client, redirect::Policy};
+
 use crate::{Error, PlatformId, Result, url};
 
 pub use crate::url::{URL_TRAILING_PUNCT, trim_url_candidate};
+
+pub const DEFAULT_RESOLVE_TIMEOUT: Duration = Duration::from_secs(30);
+const DEFAULT_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Builds the baseline HTTP client used by platform resolvers.
+pub fn resolver_http_client(timeout: Duration, config_error: &str) -> Result<Client> {
+    Client::builder()
+        .connect_timeout(DEFAULT_CONNECT_TIMEOUT)
+        .timeout(timeout)
+        .redirect(Policy::none())
+        .no_proxy()
+        .build()
+        .map_err(|_| Error::Config(config_error.to_owned()))
+}
+
+/// Applies the resolver-wide timeout shared by all platform adapters.
+pub async fn resolve_with_timeout<T>(
+    timeout: Duration,
+    future: impl Future<Output = Result<T>>,
+    timeout_message: &str,
+) -> Result<T> {
+    tokio::time::timeout(timeout, future)
+        .await
+        .map_err(|_| Error::Network(timeout_message.to_owned()))?
+}
 
 /// Maps a request failure without formatting it, which could expose signed URLs.
 pub fn map_network_error(error: &reqwest::Error, timeout_msg: &str, fail_msg: &str) -> Error {

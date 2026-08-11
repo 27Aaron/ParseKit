@@ -26,6 +26,8 @@ pub enum PlatformId {
 }
 
 impl PlatformId {
+    pub const ALL: [Self; 3] = [Self::Wechat, Self::Douyin, Self::Bilibili];
+
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Wechat => "wechat",

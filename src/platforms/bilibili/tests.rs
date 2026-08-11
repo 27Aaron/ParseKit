@@ -1,9 +1,10 @@
 //! Tests for the Bilibili resolver.
 
 use super::{
+    extract_share_url,
     parse::{build_post_from_payloads, collect_play_sources},
-    *,
 };
+use crate::{Error, PlatformId};
 
 #[test]
 fn extracts_bv_and_av_urls() {
