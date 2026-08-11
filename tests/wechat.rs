@@ -7,16 +7,16 @@ use parse_kit::{
 };
 use uuid::Uuid;
 
-const SAMPLE_SHARE_URL: &str = "https://weixin.qq.com/sph/A27pGwf5f9";
+const SAMPLE_SHARE_URL: &str = "https://weixin.qq.com/sph/AzJ7CGPYWD";
 const LIVE_DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(20 * 60);
 
 #[tokio::test]
 #[ignore = "requires YUANBAO_COOKIE and live Tencent endpoints"]
-async fn resolves_wechat_channels_sample() {
+async fn resolves_wechat_sample() {
     let post = resolve_sample().await;
 
     assert!(
-        post.platform == parse_kit::PlatformId::WechatChannels,
+        post.platform == parse_kit::PlatformId::Wechat,
         "unexpected platform identifier"
     );
     assert!(
@@ -43,14 +43,14 @@ async fn resolves_wechat_channels_sample() {
 
 #[tokio::test]
 #[ignore = "downloads live Tencent media and requires YUANBAO_COOKIE plus ffprobe"]
-async fn downloads_decrypts_and_probes_wechat_channels_sample() {
+async fn downloads_decrypts_and_probes_wechat_sample() {
     let post = resolve_sample().await;
     let directory = TestDirectory::new();
     let downloader = MediaDownloader::with_options(
         directory.path(),
         REVIEWED_WECHAT_MEDIA_HOSTS.iter().copied(),
         LIVE_DOWNLOAD_TIMEOUT,
-        DownloadRequestIdentity::wechat_channels(),
+        DownloadRequestIdentity::wechat(),
     )
     .unwrap_or_else(|_| panic!("failed to initialize the live media downloader"));
     let downloaded = downloader

@@ -1,29 +1,18 @@
-//! Live Douyin resolver tests, ignored by default.
-//!
-//! Opt in with a public video share link:
-//!
-//! ```bash
-//! DOUYIN_SAMPLE_URL='https://v.douyin.com/AbCdEf' \
-//!   cargo test --test douyin_live -- --ignored --nocapture
-//! ```
-
-use std::env;
-
 use parse_kit::platforms::DouyinResolver;
 
+const SAMPLE_SHARE: &str = "https://v.douyin.com/q75E3VmAe6A/";
+
 #[tokio::test]
-#[ignore = "requires DOUYIN_SAMPLE_URL and live Douyin endpoints"]
+#[ignore = "requires network access to Douyin"]
 async fn resolves_douyin_sample_url() {
-    let sample =
-        env::var("DOUYIN_SAMPLE_URL").expect("set DOUYIN_SAMPLE_URL to a public Douyin share URL");
     let resolver = DouyinResolver::new().expect("douyin resolver");
     let post = resolver
-        .resolve_text(&sample)
+        .resolve_text(SAMPLE_SHARE)
         .await
         .unwrap_or_else(|error| panic!("douyin resolve failed: {error}"));
 
     assert_eq!(post.platform, parse_kit::PlatformId::Douyin);
-    assert!(!post.post_id.is_empty());
+    assert_eq!(post.post_id, "7661946724177829115");
     assert_eq!(post.primary_video().unwrap().url.scheme(), "https");
     assert!(
         post.primary_video().unwrap().url.host_str().is_some(),
