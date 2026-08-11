@@ -7,11 +7,12 @@
 
 当前已接入：
 
-| 平台 | 状态 |
-|------|------|
-| 微信视频号 | ✅ |
+| 平台 | 状态 | 说明 |
+|------|------|------|
+| 微信视频号 | ✅ | 需元宝 Cookie |
+| 抖音 | ✅ 视频 | 分享页解析；图集/笔记暂不支持 |
 
-后续计划：抖音、快手、B 站等。新平台实现 `PlatformResolver`，挂到 `platforms::Platform` 并在 `ParseHub::new` 注册即可（见 `src/platforms/mod.rs`）。
+后续计划：快手、B 站等。新平台实现 `PlatformResolver`，挂到 `platforms::Platform` 并在 `ParseHub::new` 注册即可（见 `src/platforms/mod.rs`）。
 
 ## 作为依赖使用
 
@@ -28,9 +29,11 @@ async fn main() -> parse_core::Result<()> {
     let hub = ParseHub::new(std::env::var("WECHAT_YUANBAO_COOKIE").unwrap())?;
     let post = hub.resolve_text("分享文案或链接…").await?;
 
-    // CDN allowlist is explicit per platform (WeChat convenience helper shown).
-    // Multi-platform apps: MediaDownloader::with_allowed_hosts(dir, max, hosts).
-    let _downloader = MediaDownloader::for_wechat_channels("/tmp/parse-media", 200 * 1024 * 1024)?;
+    // CDN allowlist is explicit per platform.
+    let _downloader = match post.platform.as_str() {
+        "douyin" => MediaDownloader::for_douyin("/tmp/parse-media", 200 * 1024 * 1024)?,
+        _ => MediaDownloader::for_wechat_channels("/tmp/parse-media", 200 * 1024 * 1024)?,
+    };
     println!("{:#?}", post);
     Ok(())
 }
