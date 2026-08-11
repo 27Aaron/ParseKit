@@ -7,7 +7,7 @@ use tokio::{
 
 use crate::{Error, Result};
 
-const ENCRYPTED_PREFIX_BYTES: usize = 128 * 1024;
+pub(crate) const ENCRYPTED_PREFIX_BYTES: usize = 128 * 1024;
 
 /// XOR-decrypt the first 128 KiB with WeChat `decode_key`. Returns whether bytes changed.
 pub async fn decrypt_file_prefix(path: &Path, decode_key: u64) -> Result<bool> {
@@ -27,7 +27,11 @@ pub async fn decrypt_file_prefix(path: &Path, decode_key: u64) -> Result<bool> {
         return Ok(false);
     }
 
-    xor_keystream(&mut prefix, decode_key);
+    // Stream XOR in chunks so peak temp memory stays small for the prefix pass.
+    let mut xor = PrefixXor::new(decode_key);
+    for chunk in prefix.chunks_mut(8 * 1024) {
+        xor.transform(chunk);
+    }
     if !looks_like_bmff(&prefix) {
         return Err(Error::InvalidMedia(
             "decodeKey 与媒体不匹配，解密后没有有效 BMFF 文件头".into(),
@@ -38,6 +42,56 @@ pub async fn decrypt_file_prefix(path: &Path, decode_key: u64) -> Result<bool> {
     file.write_all(&prefix).await?;
     file.flush().await?;
     Ok(true)
+}
+
+/// True if the file prefix already looks like a playable MP4/BMFF.
+pub async fn prefix_looks_like_bmff(path: &Path) -> Result<bool> {
+    let mut file = OpenOptions::new().read(true).open(path).await?;
+    let length = file
+        .metadata()
+        .await?
+        .len()
+        .min(ENCRYPTED_PREFIX_BYTES as u64) as usize;
+    if length < 8 {
+        return Ok(false);
+    }
+    let mut prefix = vec![0_u8; length];
+    file.read_exact(&mut prefix).await?;
+    Ok(looks_like_bmff(&prefix))
+}
+
+/// Streaming XOR for the encrypted prefix (first 128 KiB).
+pub(crate) struct PrefixXor {
+    isaac: Isaac64,
+    block: [u8; 8],
+    block_pos: usize,
+    pub(crate) remaining: usize,
+}
+
+impl PrefixXor {
+    pub(crate) fn new(key: u64) -> Self {
+        Self {
+            isaac: Isaac64::new(key),
+            block: [0; 8],
+            block_pos: 8,
+            remaining: ENCRYPTED_PREFIX_BYTES,
+        }
+    }
+
+    pub(crate) fn transform(&mut self, data: &mut [u8]) {
+        for byte in data.iter_mut() {
+            if self.remaining == 0 {
+                break;
+            }
+            if self.block_pos >= 8 {
+                self.block = self.isaac.next().to_be_bytes();
+                self.block_pos = 0;
+            }
+            *byte ^= self.block[self.block_pos];
+            self.block_pos += 1;
+            self.remaining -= 1;
+        }
+    }
 }
 
 fn looks_like_bmff(data: &[u8]) -> bool {
@@ -81,14 +135,10 @@ fn looks_like_bmff(data: &[u8]) -> bool {
     false
 }
 
+#[cfg(test)]
 fn xor_keystream(data: &mut [u8], key: u64) {
-    let mut isaac = Isaac64::new(key);
-    for chunk in data.chunks_mut(8) {
-        let random = isaac.next().to_be_bytes();
-        for (byte, mask) in chunk.iter_mut().zip(random) {
-            *byte ^= mask;
-        }
-    }
+    let mut xor = PrefixXor::new(key);
+    xor.transform(data);
 }
 
 struct Isaac64 {
@@ -256,6 +306,27 @@ mod tests {
         assert_eq!(tokio::fs::read(&path).await.unwrap(), plaintext);
         assert!(!decrypt_file_prefix(&path, 2_136_343_393).await.unwrap());
         tokio::fs::remove_file(path).await.unwrap();
+    }
+
+    #[test]
+    fn streaming_xor_matches_bulk_keystream() {
+        let mut bulk = vec![0x5a_u8; ENCRYPTED_PREFIX_BYTES + 64];
+        let mut stream = bulk.clone();
+        xor_keystream(&mut bulk[..ENCRYPTED_PREFIX_BYTES], 2_136_343_393);
+
+        let mut xor = PrefixXor::new(2_136_343_393);
+        for chunk in stream.chunks_mut(137) {
+            xor.transform(chunk);
+        }
+        assert_eq!(xor.remaining, 0);
+        assert_eq!(
+            &stream[..ENCRYPTED_PREFIX_BYTES],
+            &bulk[..ENCRYPTED_PREFIX_BYTES]
+        );
+        assert_eq!(
+            &stream[ENCRYPTED_PREFIX_BYTES..],
+            &bulk[ENCRYPTED_PREFIX_BYTES..]
+        );
     }
 
     #[test]

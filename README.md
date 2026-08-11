@@ -6,9 +6,12 @@
 
 ```bash
 cp .env.example .env.local   # 填 YUANBAO_COOKIE 等
-cargo run -p parse-kit --bin pk -- platforms
-cargo run -p parse-kit --bin pk -- resolve "分享文案或链接"
-cargo run -p parse-kit --bin pk -- download "分享文案或链接" -o ./downloads
+cargo run --bin pk -- platforms
+cargo run --bin pk -- resolve "分享文案或链接"
+cargo run --bin pk -- download "分享文案或链接" -o ./downloads
+# 多画质：默认最高；--source 0 指定下标；--prefer smallest 优先小文件
+cargo run --bin pk -- download "…" --source 1
+cargo run --bin pk -- download "…" --prefer smallest
 ```
 
 环境变量见 `.env.example`。无 CLI：`cargo build --no-default-features`。
