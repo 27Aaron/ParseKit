@@ -467,13 +467,16 @@ impl MediaDownloader {
 
         for redirect_count in 0..=MAX_REDIRECTS {
             let host = validate_media_url(&current, &self.allowed_hosts)?.to_ascii_lowercase();
-            if !pinned_clients.contains_key(&host) {
-                let addresses = resolve_public_addresses(&host).await?;
+            let port = current.port_or_known_default().unwrap_or(443);
+            // Pin per host:port so CDN edges on :20443 etc. connect to the right socket.
+            let client_key = format!("{host}:{port}");
+            if !pinned_clients.contains_key(&client_key) {
+                let addresses = resolve_public_addresses(&host, port).await?;
                 let client = pinned_http_client(&host, &addresses, self.request_timeout)?;
-                pinned_clients.insert(host.clone(), client);
+                pinned_clients.insert(client_key.clone(), client);
             }
             let client = pinned_clients
-                .get(&host)
+                .get(&client_key)
                 .ok_or_else(|| Error::Download("媒体 HTTP 客户端初始化失败".to_owned()))?;
 
             let response = self

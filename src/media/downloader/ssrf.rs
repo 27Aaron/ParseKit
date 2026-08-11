@@ -25,9 +25,8 @@ pub(super) fn validate_media_url<'a>(
     if !url.username().is_empty() || url.password().is_some() {
         return Err(Error::Download("媒体地址不能包含用户凭据".to_owned()));
     }
-    if url.port().is_some_and(|port| port != 443) {
-        return Err(Error::Download("媒体地址不能使用非标准端口".to_owned()));
-    }
+    // CDN edges (e.g. Douyin jspcdn) may use non-443 HTTPS ports; host allowlist +
+    // public-IP checks still apply. Reject only empty/invalid ports implicitly via URL.
     if url.fragment().is_some() {
         return Err(Error::Download("媒体地址不能包含片段标识".to_owned()));
     }
@@ -48,8 +47,9 @@ pub(super) fn host_is_allowed(host: &str, allowed_hosts: &HashSet<String>) -> bo
     host_matches_rules(host, allowed_hosts.iter().map(String::as_str))
 }
 
-pub(super) async fn resolve_public_addresses(host: &str) -> Result<Vec<SocketAddr>> {
-    let addresses = timeout(DNS_TIMEOUT, tokio::net::lookup_host((host, 443)))
+/// Resolves `host` for connecting on `port` (must match the request URL port for pinning).
+pub(super) async fn resolve_public_addresses(host: &str, port: u16) -> Result<Vec<SocketAddr>> {
+    let addresses = timeout(DNS_TIMEOUT, tokio::net::lookup_host((host, port)))
         .await
         .map_err(|_| Error::Network("媒体主机 DNS 解析超时".to_owned()))?
         .map_err(|_| Error::Network("媒体主机 DNS 解析失败".to_owned()))?
