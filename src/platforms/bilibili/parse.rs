@@ -16,6 +16,7 @@ use super::{BilibiliResolver, REVIEWED_MEDIA_HOSTS, share::VideoId};
 pub(super) async fn build_post_from_view(
     id: &VideoId,
     view: &Value,
+    page: Option<usize>,
     resolver: &BilibiliResolver,
 ) -> Result<ResolvedPost> {
     let bvid = view
@@ -31,14 +32,31 @@ pub(super) async fn build_post_from_view(
     let aid = view.get("aid").and_then(Value::as_u64);
     let title = title_from_view(view);
     let cover_url = cover_from_view(view);
-    let cid = view
-        .get("cid")
-        .and_then(Value::as_u64)
-        .or_else(|| view.pointer("/pages/0/cid").and_then(Value::as_u64))
-        .ok_or(Error::UpstreamChanged)?;
+    let cid = cid_from_view(view, page)?;
 
     let sources = resolver.request_play_sources(&bvid, cid).await?;
-    build_post_from_data(&bvid, aid, title, cover_url, sources)
+    build_post_from_data(&bvid, aid, title, cover_url, page, sources)
+}
+
+pub(super) fn cid_from_view(view: &Value, page: Option<usize>) -> Result<u64> {
+    if let Some(page) = page {
+        if let Some(cid) = page
+            .checked_sub(1)
+            .and_then(|index| view.get("pages")?.as_array()?.get(index))
+            .and_then(|page| page.get("cid"))
+            .and_then(Value::as_u64)
+        {
+            return Ok(cid);
+        }
+        if page != 1 {
+            return Err(Error::NotFound);
+        }
+    }
+
+    view.get("cid")
+        .and_then(Value::as_u64)
+        .or_else(|| view.pointer("/pages/0/cid").and_then(Value::as_u64))
+        .ok_or(Error::UpstreamChanged)
 }
 
 fn title_from_view(view: &Value) -> Option<String> {
@@ -61,6 +79,7 @@ fn build_post_from_data(
     aid: Option<u64>,
     title: Option<String>,
     cover_url: Option<Url>,
+    page: Option<usize>,
     mut sources: Vec<MediaSource>,
 ) -> Result<ResolvedPost> {
     if sources.is_empty() {
@@ -68,8 +87,13 @@ fn build_post_from_data(
     }
     let primary = sources.remove(0);
     let post_id = aid.map_or_else(|| bvid.to_owned(), |aid| aid.to_string());
-    let canonical_url = Url::parse(&format!("https://www.bilibili.com/video/{bvid}"))
+    let mut canonical_url = Url::parse(&format!("https://www.bilibili.com/video/{bvid}"))
         .map_err(|_| Error::UpstreamChanged)?;
+    if let Some(page) = page.filter(|page| *page > 1) {
+        canonical_url
+            .query_pairs_mut()
+            .append_pair("p", &page.to_string());
+    }
 
     Ok(ResolvedPost::new_video(
         PlatformId::Bilibili,
@@ -84,6 +108,15 @@ fn build_post_from_data(
 
 #[cfg(test)]
 pub(super) fn build_post_from_payloads(view: &Value, play: &Value) -> Result<ResolvedPost> {
+    build_post_from_payloads_for_page(view, play, None)
+}
+
+#[cfg(test)]
+pub(super) fn build_post_from_payloads_for_page(
+    view: &Value,
+    play: &Value,
+    page: Option<usize>,
+) -> Result<ResolvedPost> {
     let bvid = view
         .get("bvid")
         .and_then(Value::as_str)
@@ -94,13 +127,13 @@ pub(super) fn build_post_from_payloads(view: &Value, play: &Value) -> Result<Res
         view.get("aid").and_then(Value::as_u64),
         title_from_view(view),
         cover_from_view(view),
+        page,
         collect_play_sources(play),
     )
 }
 
 pub(super) fn collect_play_sources(play: &Value) -> Vec<MediaSource> {
-    let mut sources = collect_durl_sources(play);
-    sources.extend(collect_dash_video_sources(play));
+    let sources = collect_durl_sources(play);
     let mut seen = HashSet::with_capacity(sources.len());
     let mut unique = Vec::with_capacity(sources.len());
     for source in sources {
@@ -196,89 +229,6 @@ fn bilibili_qn_label(qn: u64) -> Option<&'static str> {
         16 => "360P",
         _ => return None,
     })
-}
-
-fn collect_dash_video_sources(play: &Value) -> Vec<MediaSource> {
-    let mut ranked: Vec<(u64, MediaSource)> = Vec::new();
-    let Some(videos) = play.pointer("/dash/video").and_then(Value::as_array) else {
-        return Vec::new();
-    };
-
-    for item in videos {
-        let bandwidth = item.get("bandwidth").and_then(Value::as_u64).unwrap_or(0);
-        let width = item
-            .get("width")
-            .and_then(Value::as_u64)
-            .and_then(|value| u32::try_from(value).ok());
-        let height = item
-            .get("height")
-            .and_then(Value::as_u64)
-            .and_then(|value| u32::try_from(value).ok());
-        let size_hint = item.get("size").and_then(Value::as_u64);
-        // Stream qn labels are more precise than resolution tiers.
-        let qn_label = item
-            .get("id")
-            .and_then(Value::as_u64)
-            .and_then(bilibili_qn_label)
-            .map(str::to_owned)
-            .or_else(|| crate::model::resolution_tier_label(width, height).map(str::to_owned));
-        let codec_hint = item
-            .get("codecs")
-            .and_then(Value::as_str)
-            .and_then(dash_codec_short);
-        let codec = item
-            .get("codecs")
-            .and_then(Value::as_str)
-            .map(dash_codec)
-            .unwrap_or(VideoCodec::Unknown);
-        let label = match (qn_label, codec_hint) {
-            (Some(q), Some(c)) => Some(format!("{q}/{c}")),
-            (Some(q), None) => Some(q),
-            (None, Some(c)) => Some(c.to_owned()),
-            (None, None) => None,
-        };
-        // Keep one CDN URL per stream representation.
-        for key in ["base_url", "baseUrl", "url"] {
-            if let Some(raw) = item.get(key).and_then(Value::as_str)
-                && let Some(mut source) =
-                    https_media_source(raw, size_hint, MediaSourceKind::Derived)
-            {
-                source.width = width;
-                source.height = height;
-                source.bitrate_bps = (bandwidth > 0).then_some(bandwidth);
-                source.label = label.clone();
-                source.codec = codec;
-                ranked.push((bandwidth, source));
-                break;
-            }
-        }
-    }
-    ranked.sort_by_key(|(bandwidth, _)| std::cmp::Reverse(*bandwidth));
-    ranked.into_iter().map(|(_, source)| source).collect()
-}
-
-fn dash_codec(codecs: &str) -> VideoCodec {
-    let lower = codecs.to_ascii_lowercase();
-    if lower.starts_with("avc") {
-        VideoCodec::H264
-    } else if lower.starts_with("hev") || lower.starts_with("hvc") {
-        VideoCodec::H265
-    } else {
-        VideoCodec::Unknown
-    }
-}
-
-fn dash_codec_short(codecs: &str) -> Option<&'static str> {
-    let lower = codecs.to_ascii_lowercase();
-    if lower.starts_with("avc") || lower.starts_with("avc1") {
-        Some("AVC")
-    } else if lower.starts_with("hev") || lower.starts_with("hvc") {
-        Some("HEVC")
-    } else if lower.starts_with("av01") || lower.starts_with("av1") {
-        Some("AV1")
-    } else {
-        None
-    }
 }
 
 fn media_url_item_to_source(

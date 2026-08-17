@@ -4,7 +4,7 @@ use std::{path::PathBuf, time::Duration};
 
 use parse_kit::{
     ContentKind, CredentialStatus, MediaSource, ResolvedPost, Result,
-    media::MediaDownloader,
+    media::{DownloadedMedia, MediaDownloader},
     wechat::{self, WechatCredentialStatus},
 };
 
@@ -147,7 +147,8 @@ pub async fn download(
     }
 
     // Images are independent; video variants are fallbacks.
-    if should_download_as_set(post.kind, chosen.len()) {
+    let strategy = download_strategy(post.kind, chosen.len(), chosen[0].0)?;
+    if strategy == DownloadStrategy::IndependentSet {
         return download_many(human, &post, &downloader, &chosen, json).await;
     }
 
@@ -159,19 +160,30 @@ pub async fn download(
     };
     let media = if let Some(spinner) = download_spin.as_ref() {
         let label = spinner.label();
-        match downloader
-            .download_playable_with_progress(
-                sources.iter().map(|(_, source)| *source),
-                move |progress| {
-                    label.set(ui::download_progress_label(
-                        progress.percent,
-                        progress.downloaded_bytes,
-                        progress.total_bytes,
-                    ));
-                },
-            )
-            .await
-        {
+        let on_progress = move |progress: parse_kit::media::DownloadProgress| {
+            label.set(ui::download_progress_label(
+                progress.percent,
+                progress.downloaded_bytes,
+                progress.total_bytes,
+            ));
+        };
+        let result = match strategy {
+            DownloadStrategy::IndexedSingle(sequence) => {
+                downloader
+                    .download_indexed_with_progress(sources[0].1, sequence, on_progress)
+                    .await
+            }
+            DownloadStrategy::PlayableFallback => {
+                downloader
+                    .download_playable_with_progress(
+                        sources.iter().map(|(_, source)| *source),
+                        on_progress,
+                    )
+                    .await
+            }
+            DownloadStrategy::IndependentSet => unreachable!("handled above"),
+        };
+        match result {
             Ok(media) => media,
             Err(error) => {
                 if let Some(spinner) = download_spin {
@@ -181,9 +193,17 @@ pub async fn download(
             }
         }
     } else {
-        downloader
-            .download_playable(sources.iter().map(|(_, source)| *source))
-            .await?
+        match strategy {
+            DownloadStrategy::IndexedSingle(sequence) => {
+                downloader.download_indexed(sources[0].1, sequence).await?
+            }
+            DownloadStrategy::PlayableFallback => {
+                downloader
+                    .download_playable(sources.iter().map(|(_, source)| *source))
+                    .await?
+            }
+            DownloadStrategy::IndependentSet => unreachable!("handled above"),
+        }
     };
     let skipped = media.skipped;
     let bytes = media.bytes;
@@ -220,8 +240,27 @@ pub async fn download(
     Ok(())
 }
 
-fn should_download_as_set(kind: ContentKind, source_count: usize) -> bool {
-    kind == ContentKind::ImageSet && source_count > 1
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum DownloadStrategy {
+    IndependentSet,
+    IndexedSingle(u32),
+    PlayableFallback,
+}
+
+fn download_strategy(
+    kind: ContentKind,
+    source_count: usize,
+    source_index: usize,
+) -> Result<DownloadStrategy> {
+    if kind != ContentKind::ImageSet {
+        return Ok(DownloadStrategy::PlayableFallback);
+    }
+    if source_count > 1 {
+        return Ok(DownloadStrategy::IndependentSet);
+    }
+    let sequence = u32::try_from(source_index)
+        .map_err(|_| parse_kit::Error::Config("媒体源序号超出支持范围".to_owned()))?;
+    Ok(DownloadStrategy::IndexedSingle(sequence))
 }
 
 async fn download_many(
@@ -238,7 +277,7 @@ async fn download_many(
         None
     };
 
-    let mut paths: Vec<(PathBuf, u64, bool)> = Vec::with_capacity(total_files);
+    let mut downloads = Vec::with_capacity(total_files);
     let mut skipped = 0usize;
     for (download_index, &(source_index, media_source)) in sources.iter().enumerate() {
         let file_no = download_index + 1;
@@ -267,18 +306,24 @@ async fn download_many(
                 if let Some(spinner) = download_spin {
                     spinner.finish_err("Failed", "download").await;
                 }
-                cleanup_new_downloads(&mut paths).await;
+                cleanup_new_downloads(&mut downloads).await;
                 return Err(error);
             }
         };
-        let was_skipped = media.skipped;
-        if was_skipped {
+        if media.skipped {
             skipped += 1;
         }
-        let bytes = media.bytes;
-        let path = media.keep();
-        paths.push((path, bytes, was_skipped));
+        downloads.push(media);
     }
+
+    let paths: Vec<(PathBuf, u64, bool)> = downloads
+        .into_iter()
+        .map(|media| {
+            let bytes = media.bytes;
+            let was_skipped = media.skipped;
+            (media.keep(), bytes, was_skipped)
+        })
+        .collect();
 
     if let Some(spinner) = download_spin {
         let total = paths
@@ -333,11 +378,11 @@ async fn download_many(
     Ok(())
 }
 
-async fn cleanup_new_downloads(paths: &mut Vec<(PathBuf, u64, bool)>) {
-    for (path, _, was_skipped) in paths.drain(..) {
-        if !was_skipped && let Err(error) = tokio::fs::remove_file(&path).await {
+async fn cleanup_new_downloads(downloads: &mut Vec<DownloadedMedia>) {
+    for media in downloads.drain(..) {
+        if let Err(error) = media.cleanup().await {
             tracing::warn!(
-                path = %path.display(),
+                path = %media.path.display(),
                 %error,
                 "failed to clean up a partial multi-file download"
             );
@@ -403,7 +448,7 @@ fn print_health(kit: &parse_kit::ParseKit) {
         },
     }
     if kit.douyin().is_some() {
-        ui::ok("douyin", "enabled");
+        ui::note("douyin temporarily unavailable (browser verification required)");
     } else {
         ui::note("douyin disabled");
     }
@@ -755,9 +800,18 @@ mod qr_image_tests {
     }
 
     #[test]
-    fn only_image_sets_are_downloaded_as_independent_files() {
-        assert!(should_download_as_set(ContentKind::ImageSet, 2));
-        assert!(!should_download_as_set(ContentKind::ImageSet, 1));
-        assert!(!should_download_as_set(ContentKind::Video, 3));
+    fn preserves_the_selected_index_for_single_images() {
+        assert_eq!(
+            download_strategy(ContentKind::ImageSet, 3, 0).unwrap(),
+            DownloadStrategy::IndependentSet
+        );
+        assert_eq!(
+            download_strategy(ContentKind::ImageSet, 1, 7).unwrap(),
+            DownloadStrategy::IndexedSingle(7)
+        );
+        assert_eq!(
+            download_strategy(ContentKind::Video, 3, 7).unwrap(),
+            DownloadStrategy::PlayableFallback
+        );
     }
 }

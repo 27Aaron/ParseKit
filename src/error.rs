@@ -8,6 +8,9 @@ pub enum Error {
     #[error("暂不支持这个链接")]
     UnsupportedUrl,
 
+    #[error("平台暂不可用：{0}")]
+    PlatformUnavailable(String),
+
     #[error("解析凭据已失效，请更新登录信息")]
     LoginRequired,
 

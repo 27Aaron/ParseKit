@@ -21,16 +21,22 @@ pub fn extract_share_url(input: &str) -> Result<Url> {
     static B23_PATTERN: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
 
     let bv = BV_PATTERN.get_or_init(|| {
-        Regex::new(r#"(?i:https?://(?:(?:www|m)\.)?bilibili\.com/video/)(BV[0-9A-Za-z]+)"#)
-            .expect("constant Bilibili BV regex must compile")
+        Regex::new(
+            r#"(?i:https?://(?:(?:www|m)\.)?bilibili\.com/video/)(BV[0-9A-Za-z]+)(?:[/?#][A-Za-z0-9._~:/?#@!$&'()*+,;=%-]*)?"#,
+        )
+        .expect("constant Bilibili BV regex must compile")
     });
     let av = AV_PATTERN.get_or_init(|| {
-        Regex::new(r#"(?i)https?://(?:(?:www|m)\.)?bilibili\.com/video/av(\d+)"#)
-            .expect("constant Bilibili av regex must compile")
+        Regex::new(
+            r#"(?i)https?://(?:(?:www|m)\.)?bilibili\.com/video/av(\d+)(?:[/?#][A-Za-z0-9._~:/?#@!$&'()*+,;=%-]*)?"#,
+        )
+        .expect("constant Bilibili av regex must compile")
     });
     let b23 = B23_PATTERN.get_or_init(|| {
-        Regex::new(r#"(?i:https?://b23\.tv/)[A-Za-z0-9]+"#)
-            .expect("constant Bilibili b23 regex must compile")
+        Regex::new(
+            r#"(?i:https?://b23\.tv/)[A-Za-z0-9]+(?:[/?#][A-Za-z0-9._~:/?#@!$&'()*+,;=%-]*)?"#,
+        )
+        .expect("constant Bilibili b23 regex must compile")
     });
 
     for pattern in [bv, av] {
@@ -106,6 +112,26 @@ pub(super) fn parse_video_id(url: &Url) -> Result<VideoId> {
         return Ok(VideoId::Aid(aid));
     }
     Err(Error::UnsupportedUrl)
+}
+
+pub(super) fn page_from_url(url: &Url) -> Result<Option<usize>> {
+    let mut page = None;
+    for (key, value) in url.query_pairs() {
+        if !key.eq_ignore_ascii_case("p") {
+            continue;
+        }
+        if page.is_some() {
+            return Err(Error::UnsupportedUrl);
+        }
+        page = Some(
+            value
+                .parse::<usize>()
+                .ok()
+                .filter(|page| *page > 0)
+                .ok_or(Error::UnsupportedUrl)?,
+        );
+    }
+    Ok(page)
 }
 
 pub(super) fn is_b23_host(url: &Url) -> bool {

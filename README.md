@@ -2,7 +2,7 @@
 
 多平台社交媒体解析与媒体下载（Rust 库 + CLI `pk`）。
 
-平台：`wechat` · `douyin` · `bilibili`
+平台：`wechat` · `bilibili`；`douyin` 因上游要求动态浏览器验证，当前版本暂停解析。
 
 ```bash
 nix develop
