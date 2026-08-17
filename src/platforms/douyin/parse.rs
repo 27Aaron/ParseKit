@@ -98,13 +98,48 @@ pub(super) fn build_post_from_router(aweme_id: &str, router: &Value) -> Result<R
         .and_then(Value::as_array)
         .and_then(|items| items.first())
         .ok_or(Error::NotFound)?;
+    build_post_from_item(aweme_id, item)
+}
 
+pub(super) fn build_post_from_aweme_detail(
+    aweme_id: &str,
+    payload: &Value,
+) -> Result<ResolvedPost> {
+    let item = payload
+        .get("aweme_detail")
+        .filter(|value| !value.is_null())
+        .ok_or_else(|| {
+            let status_msg = payload
+                .get("status_msg")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            let lowered = status_msg.to_ascii_lowercase();
+            if lowered.contains("not exist")
+                || lowered.contains("not found")
+                || status_msg.contains("不存在")
+                || status_msg.contains("删除")
+            {
+                Error::NotFound
+            } else {
+                Error::MediaUnavailable
+            }
+        })?;
+    build_post_from_item(aweme_id, item)
+}
+
+fn build_post_from_item(aweme_id: &str, item: &Value) -> Result<ResolvedPost> {
     let post_id = item
         .get("aweme_id")
         .and_then(Value::as_str)
         .filter(|value| !value.is_empty())
-        .unwrap_or(aweme_id)
-        .to_owned();
+        .map(str::to_owned)
+        .or_else(|| {
+            item.get("aweme_id")
+                .and_then(Value::as_u64)
+                .map(|value| value.to_string())
+                .filter(|value| !value.is_empty())
+        })
+        .unwrap_or_else(|| aweme_id.to_owned());
 
     let title = item
         .get("desc")
@@ -144,7 +179,15 @@ pub(super) fn build_post_from_router(aweme_id: &str, router: &Value) -> Result<R
 }
 
 fn collect_image_sources(item: &Value) -> Option<Vec<MediaSource>> {
-    let images = item.get("images").and_then(Value::as_array)?;
+    let images = item
+        .get("images")
+        .and_then(Value::as_array)
+        .filter(|images| !images.is_empty())
+        .or_else(|| {
+            item.pointer("/image_post_info/images")
+                .and_then(Value::as_array)
+                .filter(|images| !images.is_empty())
+        })?;
     let mut seen = HashSet::with_capacity(images.len());
     let mut sources = Vec::with_capacity(images.len());
     for image in images {

@@ -1,7 +1,8 @@
 use super::{
     extract_share_url,
     parse::{
-        build_post_from_router, parse_any_page_data, parse_router_data, remove_video_watermark,
+        build_post_from_aweme_detail, build_post_from_router, parse_any_page_data,
+        parse_router_data, remove_video_watermark,
     },
     share::{extract_aweme_id, is_allowed_redirect_host},
 };
@@ -380,6 +381,53 @@ fn image_sources_fall_back_to_display_image_and_are_deduplicated() {
     });
     let post = build_post_from_router("1", &router).unwrap();
     assert_eq!(post.media_sources().count(), 1);
+}
+
+#[test]
+fn builds_post_from_aweme_detail_payload() {
+    let payload = serde_json::json!({
+        "status_code": 0,
+        "aweme_detail": {
+            "aweme_id": "7661946724177829115",
+            "desc": "移动端标题",
+            "video": {
+                "play_addr": {
+                    "url_list": ["https://aweme.snssdk.com/aweme/v1/play/?video_id=v0200"],
+                    "width": 720,
+                    "height": 1280,
+                    "data_size": 1234
+                }
+            }
+        }
+    });
+    let post = build_post_from_aweme_detail("7661946724177829115", &payload).unwrap();
+    assert_eq!(post.title.as_deref(), Some("移动端标题"));
+    assert!(
+        post.primary_video()
+            .expect("video")
+            .url
+            .as_str()
+            .contains("aweme.snssdk.com")
+    );
+}
+
+#[test]
+fn image_post_info_becomes_image_set() {
+    let payload = serde_json::json!({
+        "aweme_detail": {
+            "aweme_id": "2",
+            "desc": "图集",
+            "image_post_info": {
+                "images": [
+                    {"display_image": {"url_list": ["https://p3.douyinpic.com/a.jpg"], "width": 1080, "height": 1440}},
+                    {"display_image": {"url_list": ["https://p3.douyinpic.com/b.jpg"]}}
+                ]
+            }
+        }
+    });
+    let post = build_post_from_aweme_detail("2", &payload).unwrap();
+    assert_eq!(post.kind, crate::ContentKind::ImageSet);
+    assert_eq!(post.media_sources().count(), 2);
 }
 
 #[test]

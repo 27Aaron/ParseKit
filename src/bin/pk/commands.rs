@@ -448,7 +448,7 @@ fn print_health(kit: &parse_kit::ParseKit) {
         },
     }
     if kit.douyin().is_some() {
-        ui::note("douyin temporarily unavailable (browser verification required)");
+        ui::ok("douyin", "mobile signed API");
     } else {
         ui::note("douyin disabled");
     }

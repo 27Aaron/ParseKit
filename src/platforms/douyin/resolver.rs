@@ -1,6 +1,9 @@
 //! Network orchestration for Douyin videos.
 
-use std::time::Duration;
+use std::{
+    sync::{Arc, Mutex},
+    time::Duration,
+};
 
 use reqwest::{
     Client, StatusCode,
@@ -12,26 +15,25 @@ use crate::{
     Error, ResolvedPost, Result,
     platforms::{
         PlatformResolver, PlatformSpec,
-        util::{
-            DEFAULT_RESOLVE_TIMEOUT, map_network_error, read_body_limited, resolve_with_timeout,
-            resolver_http_client,
-        },
+        util::{map_network_error, read_body_limited, resolve_with_timeout, resolver_http_client},
     },
 };
 
 use super::{
     SPEC, extract_share_url,
-    parse::{build_post_from_router, parse_any_page_data, parse_router_data},
+    mobile::{self, MobileDevice},
+    parse::{
+        build_post_from_aweme_detail, build_post_from_router, parse_any_page_data,
+        parse_router_data,
+    },
     share::{extract_aweme_id, is_allowed_redirect_host, is_short_link_host},
 };
 
-const RESOLVE_TIMEOUT: Duration = DEFAULT_RESOLVE_TIMEOUT;
+const RESOLVE_TIMEOUT: Duration = Duration::from_secs(45);
 const MAX_SHORTLINK_REDIRECTS: usize = 8;
 const MAX_HTML_BYTES: usize = 2 * 1024 * 1024;
 const MOBILE_UA: &str = "Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) \
     AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1";
-const LIVE_RESOLUTION_ENABLED: bool = false;
-const UNAVAILABLE_MESSAGE: &str = "抖音现要求动态浏览器验证；当前版本已暂停解析，避免返回错误媒体";
 
 fn map_douyin_network_error(error: &reqwest::Error) -> Error {
     map_network_error(error, "抖音请求超时", "抖音网络请求失败")
@@ -41,6 +43,7 @@ fn map_douyin_network_error(error: &reqwest::Error) -> Error {
 pub struct DouyinResolver {
     client: Client,
     timeout: Duration,
+    device: Arc<Mutex<Option<MobileDevice>>>,
 }
 
 impl std::fmt::Debug for DouyinResolver {
@@ -56,7 +59,11 @@ impl DouyinResolver {
     pub fn new() -> Result<Self> {
         let timeout = RESOLVE_TIMEOUT;
         let client = resolver_http_client(timeout, "无法初始化抖音 HTTP 客户端")?;
-        Ok(Self { client, timeout })
+        Ok(Self {
+            client,
+            timeout,
+            device: Arc::new(Mutex::new(MobileDevice::from_env())),
+        })
     }
 
     pub async fn resolve_text(&self, input: &str) -> Result<ResolvedPost> {
@@ -74,28 +81,54 @@ impl DouyinResolver {
     }
 
     async fn resolve_url_inner(&self, url: &Url) -> Result<ResolvedPost> {
-        if !LIVE_RESOLUTION_ENABLED {
-            return Err(Error::PlatformUnavailable(UNAVAILABLE_MESSAGE.to_owned()));
-        }
-
         let expanded = self.expand_short_link(url).await?;
         let aweme_id = extract_aweme_id(expanded.as_str()).ok_or(Error::UnsupportedUrl)?;
-        let html = self.fetch_share_html(&aweme_id).await?;
-        match parse_router_data(&html).and_then(|router| build_post_from_router(&aweme_id, &router))
+        let mut device = self
+            .device
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
+        let mobile_error =
+            match mobile::fetch_aweme_detail(&self.client, &mut device, &aweme_id).await {
+                Ok(payload) => {
+                    *self
+                        .device
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner) = device;
+                    return build_post_from_aweme_detail(&aweme_id, &payload);
+                }
+                Err(error) => {
+                    *self
+                        .device
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner) = device;
+                    error
+                }
+            };
+
+        tracing::debug!(
+            event = "douyin_mobile_detail_failed",
+            error = %mobile_error,
+            "signed mobile detail failed; trying share-page HTML fallback"
+        );
+        match self.resolve_from_html(&aweme_id).await {
+            Ok(post) => Ok(post),
+            Err(_) => Err(mobile_error),
+        }
+    }
+
+    async fn resolve_from_html(&self, aweme_id: &str) -> Result<ResolvedPost> {
+        let html = self.fetch_share_html(aweme_id).await?;
+        match parse_router_data(&html).and_then(|router| build_post_from_router(aweme_id, &router))
         {
             Ok(post) => Ok(post),
             Err(primary_error) => {
-                tracing::debug!(
-                    event = "douyin_primary_parse_failed",
-                    error = %primary_error,
-                    "iesdouyin share parse failed; trying www.douyin.com fallback"
-                );
-                let fallback_html = match self.fetch_www_video_html(&aweme_id).await {
+                let fallback_html = match self.fetch_www_video_html(aweme_id).await {
                     Ok(html) => html,
                     Err(_) => return Err(primary_error),
                 };
                 let router = parse_any_page_data(&fallback_html).map_err(|_| primary_error)?;
-                build_post_from_router(&aweme_id, &router)
+                build_post_from_router(aweme_id, &router)
             }
         }
     }
