@@ -22,6 +22,10 @@ pk wechat status && pk bilibili status
 
 新增平台时使用[统一适配器模板](./docs/adding-platform.md)。
 
+## 致谢
+
+- [ParseHub](https://github.com/z-mio/ParseHub)
+
 ## License
 
 [MIT](./LICENSE)
