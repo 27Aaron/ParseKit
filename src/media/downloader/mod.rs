@@ -39,9 +39,9 @@ use self::http::{
 use self::progress::ProgressReporter;
 use self::ssrf::{normalize_allowed_hosts, resolve_public_addresses, validate_media_url};
 use self::write::{
-    WrittenMedia, create_private_file, effective_resume_offset, existing_complete_download,
-    extension_from_content_type, extension_from_url, media_task_path, open_private_file_append,
-    path_with_better_extension, safe_file_stem, write_chunks,
+    PathClaim, WrittenMedia, acquire_path_claim, create_private_file, effective_resume_offset,
+    existing_complete_download, extension_from_content_type, extension_from_url, media_task_path,
+    open_private_file_append, path_with_better_extension, safe_file_stem, write_chunks,
 };
 
 const MAX_REDIRECTS: usize = 5;
@@ -89,6 +89,11 @@ pub struct DownloadProgress {
 
 pub(super) type ProgressCallback = Arc<dyn Fn(DownloadProgress) + Send + Sync + 'static>;
 
+struct ClaimedMediaPath {
+    path: PathBuf,
+    path_claim: Option<Arc<PathClaim>>,
+}
+
 /// Downloaded file that removes new data on drop unless explicitly kept.
 #[derive(Debug)]
 #[must_use = "downloaded media must be uploaded, kept, or explicitly cleaned up"]
@@ -98,6 +103,7 @@ pub struct DownloadedMedia {
     /// Whether an existing file was reused and retained on drop.
     pub skipped: bool,
     armed: bool,
+    path_claim: Option<Arc<PathClaim>>,
 }
 
 impl DownloadedMedia {
@@ -107,6 +113,7 @@ impl DownloadedMedia {
             bytes,
             skipped: false,
             armed: true,
+            path_claim: None,
         }
     }
 
@@ -117,7 +124,13 @@ impl DownloadedMedia {
             bytes,
             skipped: true,
             armed: false,
+            path_claim: None,
         }
+    }
+
+    fn with_path_claim(mut self, path_claim: Option<Arc<PathClaim>>) -> Self {
+        self.path_claim = path_claim;
+        self
     }
 
     pub async fn cleanup(&self) -> Result<()> {
@@ -470,6 +483,18 @@ impl MediaDownloader {
         decode_key: Option<u64>,
         sequence: u32,
     ) -> Result<DownloadedMedia> {
+        let path_claim = timeout(
+            self.request_timeout,
+            acquire_path_claim(
+                self.workspace_dir.as_path(),
+                self.file_stem.as_deref(),
+                sequence,
+            ),
+        )
+        .await
+        .map_err(|_| Error::Download("等待同名媒体下载完成超时".to_owned()))??
+        .map(Arc::new);
+
         // Stable paths enable resume; encrypted prefixes always restart.
         let preferred_ext = extension_from_url(url);
         if self.skip_existing
@@ -487,7 +512,7 @@ impl MediaDownloader {
                 bytes,
                 "reusing complete local media file"
             );
-            return Ok(DownloadedMedia::reused(existing, bytes));
+            return Ok(DownloadedMedia::reused(existing, bytes).with_path_claim(path_claim));
         }
 
         let path = media_task_path(
@@ -505,6 +530,7 @@ impl MediaDownloader {
                 || {
                     let path = Arc::clone(&path);
                     let progress_callback = progress_callback.clone();
+                    let path_claim = path_claim.clone();
                     async move {
                         let resume_from = if allow_resume {
                             tokio::fs::symlink_metadata(path.as_path())
@@ -518,10 +544,12 @@ impl MediaDownloader {
                         };
                         self.download_url_within_deadline(
                             url,
-                            size_hint,
                             progress_callback,
                             decode_key,
-                            path.as_path().to_path_buf(),
+                            ClaimedMediaPath {
+                                path: path.as_path().to_path_buf(),
+                                path_claim,
+                            },
                             resume_from,
                         )
                         .await
@@ -542,12 +570,12 @@ impl MediaDownloader {
     async fn download_url_within_deadline(
         &self,
         url: &Url,
-        _size_hint: Option<u64>,
         progress_callback: Option<ProgressCallback>,
         decode_key: Option<u64>,
-        path: PathBuf,
+        target: ClaimedMediaPath,
         mut resume_from: u64,
     ) -> Result<DownloadedMedia> {
+        let ClaimedMediaPath { path, path_claim } = target;
         // Permit one clean restart when resume is unsupported.
         for _ in 0..2 {
             let response = self.follow_redirects(url.clone(), resume_from).await?;
@@ -619,7 +647,10 @@ impl MediaDownloader {
                     (total_hint, ranged_response_length),
                     progress_callback,
                     decode_key,
-                    path,
+                    ClaimedMediaPath {
+                        path,
+                        path_claim: path_claim.clone(),
+                    },
                     resume_from,
                 )
                 .await?;
@@ -707,9 +738,10 @@ impl MediaDownloader {
         length_hints: (Option<u64>, Option<u64>),
         progress_callback: Option<ProgressCallback>,
         decode_key: Option<u64>,
-        path: PathBuf,
+        target: ClaimedMediaPath,
         resume_from: u64,
     ) -> Result<DownloadedMedia> {
+        let ClaimedMediaPath { path, path_claim } = target;
         let (content_length, ranged_response_length) = length_hints;
         // Delay filesystem changes until the response is validated.
         if let Some(parent) = path.parent() {
@@ -722,7 +754,8 @@ impl MediaDownloader {
         } else {
             let _ = tokio::fs::remove_file(&path).await;
             create_private_file(path.clone()).await?
-        };
+        }
+        .with_path_claim(path_claim);
         let (sender, mut receiver) = tokio::sync::mpsc::channel(4);
         let disk_write_budget = Arc::clone(&self.disk_write_budget);
         let (progress_reporter, _progress_guard) =

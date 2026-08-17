@@ -30,6 +30,8 @@ const MAX_SHORTLINK_REDIRECTS: usize = 8;
 const MAX_HTML_BYTES: usize = 2 * 1024 * 1024;
 const MOBILE_UA: &str = "Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) \
     AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1";
+const LIVE_RESOLUTION_ENABLED: bool = false;
+const UNAVAILABLE_MESSAGE: &str = "抖音现要求动态浏览器验证；当前版本已暂停解析，避免返回错误媒体";
 
 fn map_douyin_network_error(error: &reqwest::Error) -> Error {
     map_network_error(error, "抖音请求超时", "抖音网络请求失败")
@@ -72,6 +74,10 @@ impl DouyinResolver {
     }
 
     async fn resolve_url_inner(&self, url: &Url) -> Result<ResolvedPost> {
+        if !LIVE_RESOLUTION_ENABLED {
+            return Err(Error::PlatformUnavailable(UNAVAILABLE_MESSAGE.to_owned()));
+        }
+
         let expanded = self.expand_short_link(url).await?;
         let aweme_id = extract_aweme_id(expanded.as_str()).ok_or(Error::UnsupportedUrl)?;
         let html = self.fetch_share_html(&aweme_id).await?;

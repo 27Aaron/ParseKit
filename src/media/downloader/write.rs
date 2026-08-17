@@ -5,6 +5,7 @@ use std::{
     io::Write,
     path::{Path, PathBuf},
     sync::{Arc, Mutex as StdMutex},
+    time::Duration,
 };
 
 use tokio::sync::mpsc;
@@ -43,6 +44,74 @@ pub(super) fn safe_file_stem(raw: &str) -> Option<String> {
     (!stem.is_empty()).then_some(stem)
 }
 
+#[derive(Debug)]
+pub(super) struct PathClaim {
+    _file: File,
+}
+
+pub(super) async fn acquire_path_claim(
+    directory: &Path,
+    file_stem: Option<&str>,
+    sequence: u32,
+) -> Result<Option<PathClaim>> {
+    let Some(stem) = file_stem.and_then(safe_file_stem) else {
+        return Ok(None);
+    };
+    let base = if sequence == 0 {
+        stem
+    } else {
+        format!("{stem}_{sequence}")
+    };
+    tokio::fs::create_dir_all(directory)
+        .await
+        .map_err(|_| Error::Storage(directory.to_path_buf()))?;
+    // The lock inode stays in place so waiters cannot split across replacement files.
+    let lock_path = directory.join(format!(".{base}.parse-kit.lock"));
+    let storage_path = lock_path.clone();
+    let file = tokio::task::spawn_blocking(move || {
+        if let Ok(metadata) = std::fs::symlink_metadata(&lock_path)
+            && (!metadata.is_file() || metadata.file_type().is_symlink())
+        {
+            return Err(std::io::Error::other("media lock is not a regular file"));
+        }
+        let mut options = OpenOptions::new();
+        options.read(true).write(true).create(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600).custom_flags(libc::O_NOFOLLOW);
+        }
+        let file = options.open(&lock_path)?;
+        let metadata = file.metadata()?;
+        if !metadata.is_file() {
+            return Err(std::io::Error::other("media lock is not a regular file"));
+        }
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt;
+            if metadata.nlink() != 1 {
+                return Err(std::io::Error::other("media lock has multiple hard links"));
+            }
+        }
+        Ok(file)
+    })
+    .await
+    .map_err(|_| Error::Storage(storage_path.clone()))?
+    .map_err(|_| Error::Storage(storage_path.clone()))?;
+
+    loop {
+        match file.try_lock() {
+            Ok(()) => return Ok(Some(PathClaim { _file: file })),
+            Err(std::fs::TryLockError::WouldBlock) => {
+                tokio::time::sleep(Duration::from_millis(25)).await;
+            }
+            Err(std::fs::TryLockError::Error(_)) => {
+                return Err(Error::Storage(storage_path));
+            }
+        }
+    }
+}
+
 const EXISTING_MEDIA_EXTS: &[&str] = &[
     "mp4", "m4v", "mov", "m4s", "webm", "mkv", "flv", "mpeg", "mpg", "ts", "jpg", "jpeg", "png",
     "webp", "gif", "avif", "heic", "mp3", "m4a", "aac", "ogg", "bin",
@@ -57,6 +126,7 @@ pub(super) async fn existing_complete_download(
     size_hint: Option<u64>,
 ) -> Option<(PathBuf, u64)> {
     let stem = file_stem.and_then(safe_file_stem)?;
+    let expected_size = size_hint?;
     let base = if sequence == 0 {
         stem
     } else {
@@ -81,27 +151,11 @@ pub(super) async fn existing_complete_download(
             continue;
         }
         let len = meta.len();
-        if len == 0 {
-            continue;
-        }
-        if let Some(hint) = size_hint {
-            if len >= hint && has_recognizable_media_header(&path).await {
-                return Some((path, len));
-            }
-            continue;
-        }
-        if looks_like_complete_media(&path, len).await {
+        if len == expected_size && has_recognizable_media_header(&path).await {
             return Some((path, len));
         }
     }
     None
-}
-
-async fn looks_like_complete_media(path: &Path, len: u64) -> bool {
-    if len < 1024 {
-        return false;
-    }
-    has_recognizable_media_header(path).await
 }
 
 async fn has_recognizable_media_header(path: &Path) -> bool {
@@ -447,6 +501,7 @@ pub(super) struct PendingFile {
     path: PathBuf,
     file: Option<File>,
     armed: bool,
+    path_claim: Option<Arc<PathClaim>>,
 }
 
 impl PendingFile {
@@ -455,7 +510,13 @@ impl PendingFile {
             path,
             file: Some(file),
             armed: true,
+            path_claim: None,
         }
+    }
+
+    pub(super) fn with_path_claim(mut self, path_claim: Option<Arc<PathClaim>>) -> Self {
+        self.path_claim = path_claim;
+        self
     }
 
     fn file_mut(&mut self) -> Result<&mut File> {
@@ -469,7 +530,7 @@ impl PendingFile {
         file.flush()?;
         drop(self.file.take());
         self.armed = false;
-        Ok(DownloadedMedia::new(self.path.clone(), bytes))
+        Ok(DownloadedMedia::new(self.path.clone(), bytes).with_path_claim(self.path_claim.take()))
     }
 }
 

@@ -18,7 +18,7 @@ pub use share::extract_share_url;
 /// Static Douyin adapter registration.
 pub const SPEC: PlatformSpec = PlatformSpec::new(
     PlatformId::Douyin,
-    "public share page",
+    "temporarily unavailable (browser verification required)",
     extract_share_url,
     REVIEWED_MEDIA_HOSTS,
     download_identity,

@@ -462,11 +462,21 @@ pub fn download_file_stem(platform: PlatformId, canonical_url: &Url, post_id: &s
     } else {
         slug
     };
-    let slug = if slug.is_empty() {
+    let mut slug = if slug.is_empty() {
         "media".to_owned()
     } else {
         slug
     };
+    if platform == PlatformId::Bilibili
+        && let Some(page) = canonical_url
+            .query_pairs()
+            .find(|(key, _)| key.eq_ignore_ascii_case("p"))
+            .and_then(|(_, value)| value.parse::<usize>().ok())
+            .filter(|page| *page > 1)
+    {
+        slug.push_str("_p");
+        slug.push_str(&page.to_string());
+    }
     format!("{}_{slug}", platform.file_prefix())
 }
 
@@ -564,6 +574,14 @@ mod tests {
                 "170001",
             ),
             "Bilibili_BV1GJ411x7h7"
+        );
+        assert_eq!(
+            download_file_stem(
+                PlatformId::Bilibili,
+                &Url::parse("https://www.bilibili.com/video/BV1GJ411x7h7?p=2").unwrap(),
+                "170001",
+            ),
+            "Bilibili_BV1GJ411x7h7_p2"
         );
     }
 

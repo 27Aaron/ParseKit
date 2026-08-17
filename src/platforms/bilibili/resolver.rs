@@ -1,6 +1,6 @@
 //! Network orchestration for public Bilibili videos.
 
-use std::{collections::HashSet, time::Duration};
+use std::time::Duration;
 
 use reqwest::{
     Client, StatusCode,
@@ -27,7 +27,7 @@ use super::{
     SPEC, extract_share_url,
     hosts::USER_AGENT_VALUE,
     parse::{build_post_from_view, collect_play_sources},
-    share::{VideoId, is_b23_host, parse_video_id},
+    share::{VideoId, is_b23_host, page_from_url, parse_video_id},
 };
 
 const RESOLVE_TIMEOUT: Duration = DEFAULT_RESOLVE_TIMEOUT;
@@ -36,11 +36,9 @@ const MAX_SHORTLINK_REDIRECTS: usize = 8;
 const VIEW_API: &str = "https://api.bilibili.com/x/web-interface/view";
 const PLAYURL_API: &str = "https://api.bilibili.com/x/player/playurl";
 
-/// Anonymous ladder: progressive first, then DASH.
-const ANON_PLAY_ATTEMPTS: &[(u32, u32)] =
-    &[(1, 80), (1, 64), (1, 32), (16, 80), (80, 80), (4048, 80)];
-/// Authenticated ladder: DASH first, then muxed progressive.
-const AUTH_PLAY_ATTEMPTS: &[(u32, u32)] = &[(4048, 127), (80, 112), (1, 80)];
+/// Only muxed progressive responses are playable without a separate audio merge step.
+const ANON_PLAY_ATTEMPTS: &[(u32, u32)] = &[(1, 80), (1, 64), (1, 32)];
+const AUTH_PLAY_ATTEMPTS: &[(u32, u32)] = &[(1, 112), (1, 80), (1, 64), (1, 32)];
 
 #[derive(Clone)]
 pub struct BilibiliResolver {
@@ -129,8 +127,9 @@ impl BilibiliResolver {
             current = self.expand_short_link(current).await?;
         }
         let id = parse_video_id(&current)?;
+        let page = page_from_url(&current)?;
         let view = self.request_view(&id).await?;
-        build_post_from_view(&id, &view, self).await
+        build_post_from_view(&id, &view, page, self).await
     }
 
     async fn expand_short_link(&self, mut current: Url) -> Result<Url> {
@@ -192,52 +191,30 @@ impl BilibiliResolver {
             .ok_or(Error::UpstreamChanged)
     }
 
-    /// Merges muxed progressive and authenticated DASH ladders.
+    /// Returns the best available muxed progressive source and its CDN mirrors.
     pub(super) async fn request_play_sources(
         &self,
         bvid: &str,
         cid: u64,
     ) -> Result<Vec<MediaSource>> {
-        let authenticated = self.is_authenticated();
-        let attempts = if authenticated {
+        let attempts = if self.is_authenticated() {
             AUTH_PLAY_ATTEMPTS
         } else {
             ANON_PLAY_ATTEMPTS
         };
         let mut last_error = None;
-        let mut collected = Vec::new();
-        let mut seen_urls = HashSet::new();
-        let mut got_dash = false;
         for &(fnval, qn) in attempts {
-            // After DASH succeeds, only the muxed progressive option remains useful.
-            if authenticated && got_dash && fnval != 1 {
-                continue;
-            }
             match self.request_playurl_raw(bvid, cid, fnval, qn).await {
                 Ok(play) => {
-                    let before = collected.len();
-                    for source in collect_play_sources(&play) {
-                        if seen_urls.insert(source.url.clone()) {
-                            collected.push(source);
-                        }
-                    }
-                    let added = collected.len() > before;
-                    if fnval != 1 && added {
-                        got_dash = true;
-                    }
-                    // Anonymous resolution stops after the first progressive source.
-                    if !authenticated && fnval == 1 && !collected.is_empty() {
-                        return Ok(collected);
+                    let sources = collect_play_sources(&play);
+                    if !sources.is_empty() {
+                        return Ok(sources);
                     }
                 }
                 Err(error) => last_error = Some(error),
             }
         }
-        if collected.is_empty() {
-            Err(last_error.unwrap_or(Error::MediaUnavailable))
-        } else {
-            Ok(dedupe_and_rank_play_sources(collected))
-        }
+        Err(last_error.unwrap_or(Error::MediaUnavailable))
     }
 
     async fn request_playurl_raw(
@@ -313,34 +290,4 @@ fn map_status(status: StatusCode) -> Result<()> {
         StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN => Err(Error::LoginRequired),
         _ => Err(Error::Network(format!("上游返回 HTTP {}", status.as_u16()))),
     }
-}
-
-/// Keeps the highest-bitrate stream for each quality key.
-fn dedupe_and_rank_play_sources(sources: Vec<MediaSource>) -> Vec<MediaSource> {
-    let mut ranked = sources;
-    ranked.sort_by(|a, b| {
-        let area = |s: &MediaSource| {
-            s.width
-                .and_then(|w| s.height.map(|h| u64::from(w) * u64::from(h)))
-                .unwrap_or(0)
-        };
-        area(b)
-            .cmp(&area(a))
-            .then_with(|| b.bitrate_bps.unwrap_or(0).cmp(&a.bitrate_bps.unwrap_or(0)))
-            .then_with(|| b.size_hint.unwrap_or(0).cmp(&a.size_hint.unwrap_or(0)))
-    });
-
-    let mut seen = HashSet::with_capacity(ranked.len());
-    let mut unique = Vec::with_capacity(ranked.len());
-    for source in ranked {
-        let key = (
-            source.label.clone().unwrap_or_default(),
-            source.width.unwrap_or(0),
-            source.height.unwrap_or(0),
-        );
-        if seen.insert(key) {
-            unique.push(source);
-        }
-    }
-    unique
 }

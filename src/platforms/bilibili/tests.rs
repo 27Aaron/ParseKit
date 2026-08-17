@@ -1,16 +1,79 @@
 use super::{
     BilibiliResolver, extract_share_url,
-    parse::{build_post_from_payloads, collect_play_sources},
+    parse::{
+        build_post_from_payloads, build_post_from_payloads_for_page, cid_from_view,
+        collect_play_sources,
+    },
+    share::page_from_url,
 };
-use crate::{CredentialStatus, Error, PlatformId, VideoCodec};
+use crate::{CredentialStatus, Error, PlatformId};
 
 #[test]
 fn extracts_bv_and_av_urls() {
-    let bv = extract_share_url("看 https://www.bilibili.com/video/BV1GJ411x7h7?spm=1").unwrap();
+    let bv = extract_share_url(
+        "看 https://www.bilibili.com/video/BV1GJ411x7h7?p=2&spm_id_from=333.1007",
+    )
+    .unwrap();
     assert!(bv.path().contains("BV1GJ411x7h7"));
+    assert_eq!(
+        bv.query_pairs()
+            .find(|(key, _)| key == "p")
+            .map(|(_, value)| value.into_owned())
+            .as_deref(),
+        Some("2")
+    );
+
+    assert_eq!(page_from_url(&bv).unwrap(), Some(2));
 
     let av = extract_share_url("https://m.bilibili.com/video/av170001").unwrap();
     assert!(av.as_str().contains("av170001"));
+}
+
+#[test]
+fn selects_and_names_requested_page() {
+    let view = serde_json::json!({
+        "bvid": "BV1GJ411x7h7",
+        "aid": 170001,
+        "title": "测试稿件",
+        "cid": 111,
+        "pages": [{"cid": 111}, {"cid": 222}]
+    });
+    let play = serde_json::json!({
+        "durl": [{
+            "url": "https://upos-sz-mirrorcos.bilivideo.com/page-2.mp4",
+            "size": 12345
+        }]
+    });
+
+    assert_eq!(cid_from_view(&view, Some(2)).unwrap(), 222);
+    assert!(matches!(
+        cid_from_view(&view, Some(3)),
+        Err(Error::NotFound)
+    ));
+
+    let post = build_post_from_payloads_for_page(&view, &play, Some(2)).unwrap();
+    assert_eq!(
+        post.canonical_url.as_str(),
+        "https://www.bilibili.com/video/BV1GJ411x7h7?p=2"
+    );
+    assert_eq!(post.download_file_stem(), "Bilibili_BV1GJ411x7h7_p2");
+}
+
+#[tokio::test]
+async fn resolver_rejects_invalid_or_ambiguous_page_queries_without_network() {
+    let resolver = BilibiliResolver::new().unwrap();
+    for raw in [
+        "https://www.bilibili.com/video/BV1GJ411x7h7?p=0",
+        "https://www.bilibili.com/video/BV1GJ411x7h7?p=abc",
+        "https://www.bilibili.com/video/BV1GJ411x7h7?p=1&p=2",
+    ] {
+        let url = url::Url::parse(raw).unwrap();
+        assert!(matches!(page_from_url(&url), Err(Error::UnsupportedUrl)));
+        assert!(matches!(
+            resolver.resolve_text(raw).await,
+            Err(Error::UnsupportedUrl)
+        ));
+    }
 }
 
 #[test]
@@ -40,7 +103,7 @@ fn builds_from_committed_fixtures() {
 }
 
 #[test]
-fn collects_dash_video_by_bandwidth() {
+fn rejects_video_only_dash_tracks_as_playable_sources() {
     let play = serde_json::json!({
         "dash": {
             "video": [
@@ -64,12 +127,7 @@ fn collects_dash_video_by_bandwidth() {
             ]
         }
     });
-    let sources = collect_play_sources(&play);
-    assert_eq!(sources.len(), 2);
-    assert!(sources[0].url.as_str().contains("high"));
-    assert_eq!(sources[0].width, Some(1920));
-    assert_eq!(sources[0].label.as_deref(), Some("1080P/HEVC"));
-    assert_eq!(sources[0].codec, VideoCodec::H265);
+    assert!(collect_play_sources(&play).is_empty());
 }
 
 #[test]

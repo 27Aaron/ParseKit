@@ -1,5 +1,5 @@
 use parse_kit::{
-    PlatformId,
+    Error,
     platforms::{DouyinResolver, douyin::extract_share_url},
 };
 
@@ -14,20 +14,13 @@ fn extracts_and_upgrades_douyin_share_url_without_network_access() {
 }
 
 #[tokio::test]
-#[ignore = "requires network access to Douyin"]
-async fn resolves_douyin_sample_url() {
+async fn reports_browser_verification_requirement_without_network_access() {
     let resolver = DouyinResolver::new().expect("douyin resolver");
-    let post = resolver
+    let error = resolver
         .resolve_text(SAMPLE_SHARE)
         .await
-        .unwrap_or_else(|error| panic!("douyin resolve failed: {error}"));
+        .expect_err("Douyin resolution is intentionally paused");
 
-    assert_eq!(post.platform, PlatformId::Douyin);
-    assert_eq!(post.post_id, "7661946724177829115");
-    let primary = post.primary_video().expect("expected a video source");
-    assert_eq!(primary.url.scheme(), "https");
-    assert!(
-        primary.url.host_str().is_some(),
-        "resolved video URL missing host"
-    );
+    assert!(matches!(error, Error::PlatformUnavailable(_)));
+    assert!(error.to_string().contains("浏览器验证"));
 }

@@ -2,7 +2,7 @@ use std::{
     collections::HashSet,
     fs::OpenOptions,
     sync::{
-        Mutex,
+        Arc, Mutex,
         atomic::{AtomicUsize, Ordering},
     },
 };
@@ -15,13 +15,13 @@ use uuid::Uuid;
 use super::http::{check_response_status, parse_content_range};
 use super::ssrf::{is_forbidden_ip, normalize_allowed_hosts, validate_media_url};
 use super::write::{
-    MIN_FREE_DISK_BYTES, PendingFile, disk_space_is_sufficient, effective_resume_offset,
-    existing_complete_download, extension_from_content_type, extension_from_url,
-    looks_like_media_header, media_task_path, path_with_better_extension, safe_file_stem,
-    write_chunks,
+    MIN_FREE_DISK_BYTES, PendingFile, acquire_path_claim, disk_space_is_sufficient,
+    effective_resume_offset, existing_complete_download, extension_from_content_type,
+    extension_from_url, looks_like_media_header, media_task_path, path_with_better_extension,
+    safe_file_stem, write_chunks,
 };
 use super::*;
-use crate::platforms;
+use crate::{MediaSourceKind, VideoCodec, platforms};
 
 fn allowed_hosts() -> HashSet<String> {
     normalize_allowed_hosts(platforms::wechat::REVIEWED_MEDIA_HOSTS.iter().copied()).unwrap()
@@ -281,6 +281,163 @@ fn media_task_path_uses_platform_stem_and_sequence() {
             .unwrap(),
         "Wechat_AzJ7CGPYWD_1.mp4"
     );
+}
+
+#[tokio::test]
+async fn path_claim_serializes_the_same_stem_and_sequence() {
+    let dir = test_workspace();
+    let first = acquire_path_claim(dir.as_path(), Some("Wechat_demo"), 3)
+        .await
+        .unwrap()
+        .expect("deterministic paths must acquire a claim");
+
+    assert!(
+        tokio::time::timeout(
+            Duration::from_millis(30),
+            acquire_path_claim(dir.as_path(), Some("Wechat_demo"), 3),
+        )
+        .await
+        .is_err()
+    );
+    assert!(
+        tokio::time::timeout(
+            Duration::from_secs(1),
+            acquire_path_claim(dir.as_path(), Some("Wechat_demo"), 4),
+        )
+        .await
+        .unwrap()
+        .unwrap()
+        .is_some()
+    );
+
+    drop(first);
+    assert!(dir.join(".Wechat_demo_3.parse-kit.lock").is_file());
+    assert!(
+        tokio::time::timeout(
+            Duration::from_secs(1),
+            acquire_path_claim(dir.as_path(), Some("Wechat_demo"), 3),
+        )
+        .await
+        .unwrap()
+        .unwrap()
+        .is_some()
+    );
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn path_claim_rejects_symlink_lock_files() {
+    let dir = test_workspace();
+    std::fs::create_dir_all(&dir).unwrap();
+    let target = dir.join("target");
+    std::fs::write(&target, b"unchanged").unwrap();
+    std::os::unix::fs::symlink(&target, dir.join(".Wechat_demo.parse-kit.lock")).unwrap();
+
+    assert!(matches!(
+        acquire_path_claim(dir.as_path(), Some("Wechat_demo"), 0).await,
+        Err(Error::Storage(_))
+    ));
+    assert_eq!(std::fs::read(&target).unwrap(), b"unchanged");
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn path_claim_rejects_hard_linked_lock_files() {
+    let dir = test_workspace();
+    std::fs::create_dir_all(&dir).unwrap();
+    let target = dir.join("target");
+    std::fs::write(&target, b"unchanged").unwrap();
+    std::fs::hard_link(&target, dir.join(".Wechat_demo.parse-kit.lock")).unwrap();
+
+    assert!(matches!(
+        acquire_path_claim(dir.as_path(), Some("Wechat_demo"), 0).await,
+        Err(Error::Storage(_))
+    ));
+    assert_eq!(std::fs::read(&target).unwrap(), b"unchanged");
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[tokio::test]
+async fn downloaded_media_holds_its_path_claim_until_keep() {
+    let dir = test_workspace();
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("Wechat_demo.mp4");
+    std::fs::write(&path, b"data").unwrap();
+    let claim = acquire_path_claim(dir.as_path(), Some("Wechat_demo"), 0)
+        .await
+        .unwrap()
+        .expect("deterministic paths must acquire a claim");
+    let media = DownloadedMedia::new(path.clone(), 4).with_path_claim(Some(Arc::new(claim)));
+
+    assert!(
+        tokio::time::timeout(
+            Duration::from_millis(30),
+            acquire_path_claim(dir.as_path(), Some("Wechat_demo"), 0),
+        )
+        .await
+        .is_err()
+    );
+    assert_eq!(media.keep(), path);
+    assert!(
+        tokio::time::timeout(
+            Duration::from_secs(1),
+            acquire_path_claim(dir.as_path(), Some("Wechat_demo"), 0),
+        )
+        .await
+        .unwrap()
+        .unwrap()
+        .is_some()
+    );
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[tokio::test]
+async fn reused_download_keeps_competing_calls_serialized() {
+    let dir = test_workspace();
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut bytes = vec![
+        0, 0, 0, 16, b'f', b't', b'y', b'p', b'i', b's', b'o', b'm', 0, 0, 0, 0,
+    ];
+    bytes.resize(2048, 0);
+    let path = dir.join("Wechat_demo.mp4");
+    std::fs::write(&path, bytes).unwrap();
+    let downloader = MediaDownloader::with_allowed_hosts(&dir, ["example.com"])
+        .unwrap()
+        .with_file_stem("Wechat_demo");
+    let source = MediaSource {
+        url: Url::parse("https://example.com/video.mp4").unwrap(),
+        codec: VideoCodec::H264,
+        provenance: MediaSourceKind::Direct,
+        width: None,
+        height: None,
+        size_hint: Some(2048),
+        decode_key: None,
+        label: None,
+        bitrate_bps: None,
+    };
+
+    let first = downloader.download(&source).await.unwrap();
+    assert!(first.skipped);
+    let contender = downloader.clone();
+    let contender_source = source.clone();
+    let mut second = tokio::spawn(async move { contender.download(&contender_source).await });
+    assert!(
+        tokio::time::timeout(Duration::from_millis(30), &mut second)
+            .await
+            .is_err()
+    );
+
+    assert_eq!(first.keep(), path);
+    let second = tokio::time::timeout(Duration::from_secs(1), second)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    assert!(second.skipped);
+    assert_eq!(second.keep(), path);
+    let _ = std::fs::remove_dir_all(dir);
 }
 
 #[test]
@@ -670,7 +827,7 @@ fn path_with_better_extension_only_upgrades_bin() {
 }
 
 #[tokio::test]
-async fn existing_complete_download_reuses_bmff_file() {
+async fn existing_complete_download_requires_exact_known_size() {
     let dir = test_workspace();
     std::fs::create_dir_all(&dir).unwrap();
     let mut bytes = vec![
@@ -680,9 +837,21 @@ async fn existing_complete_download_reuses_bmff_file() {
     let path = dir.join("wechat_demo.mp4");
     std::fs::write(&path, &bytes).unwrap();
 
-    let found = existing_complete_download(dir.as_path(), Some("wechat_demo"), 0, "mp4", None)
-        .await
-        .expect("should reuse local file");
+    assert!(
+        existing_complete_download(dir.as_path(), Some("wechat_demo"), 0, "mp4", None)
+            .await
+            .is_none()
+    );
+    assert!(
+        existing_complete_download(dir.as_path(), Some("wechat_demo"), 0, "mp4", Some(1024))
+            .await
+            .is_none()
+    );
+
+    let found =
+        existing_complete_download(dir.as_path(), Some("wechat_demo"), 0, "mp4", Some(2048))
+            .await
+            .expect("should reuse an exact-size local file");
     assert_eq!(found.0, path);
     assert_eq!(found.1, 2048);
 
