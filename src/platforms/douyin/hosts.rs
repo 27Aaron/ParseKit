@@ -25,6 +25,22 @@ pub const REVIEWED_MEDIA_HOSTS: &[&str] = &[
     ".pstatp.com",
 ];
 
+/// Signed mobile API hosts. These are request targets, not download hosts.
+pub const REVIEWED_API_HOSTS: &[&str] = &[
+    "log.snssdk.com",
+    "aweme.snssdk.com",
+    "api.amemv.com",
+    "api3-core-c.amemv.com",
+    "api5-normal-lf.amemv.com",
+    "api3-normal-c.amemv.com",
+];
+
+pub fn is_allowed_api_host(host: &str) -> bool {
+    REVIEWED_API_HOSTS
+        .iter()
+        .any(|allowed| host.eq_ignore_ascii_case(allowed))
+}
+
 pub const REVIEWED_DOUYIN_MEDIA_HOSTS: &[&str] = REVIEWED_MEDIA_HOSTS;
 
 pub fn download_identity() -> DownloadRequestIdentity {

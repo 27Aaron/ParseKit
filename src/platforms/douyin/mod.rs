@@ -1,9 +1,11 @@
 //! Douyin platform adapter.
 
 mod hosts;
+mod mobile;
 mod parse;
 mod resolver;
 mod share;
+mod sign;
 
 #[cfg(test)]
 mod tests;
@@ -18,7 +20,7 @@ pub use share::extract_share_url;
 /// Static Douyin adapter registration.
 pub const SPEC: PlatformSpec = PlatformSpec::new(
     PlatformId::Douyin,
-    "temporarily unavailable (browser verification required)",
+    "mobile signed API",
     extract_share_url,
     REVIEWED_MEDIA_HOSTS,
     download_identity,
