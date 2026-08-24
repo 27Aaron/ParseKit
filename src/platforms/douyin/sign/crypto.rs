@@ -61,7 +61,7 @@ pub(super) fn sm3_hash(msg: &[u8]) -> [u8; 32] {
     padded.extend_from_slice(&bit_length.to_be_bytes());
 
     let mut state = IV;
-    for chunk in padded.chunks_exact(64) {
+    for chunk in padded.as_chunks::<64>().0 {
         state = sm3_compress(state, chunk, TJ0, TJ1);
     }
 
@@ -74,8 +74,8 @@ pub(super) fn sm3_hash(msg: &[u8]) -> [u8; 32] {
 
 fn sm3_compress(v_i: [u32; 8], block: &[u8], tj0: u32, tj1: u32) -> [u32; 8] {
     let mut w = [0u32; 68];
-    for (index, chunk) in block.chunks_exact(4).enumerate() {
-        w[index] = u32::from_be_bytes(chunk.try_into().expect("4-byte SM3 word"));
+    for (index, chunk) in block.as_chunks::<4>().0.iter().enumerate() {
+        w[index] = u32::from_be_bytes(*chunk);
     }
     for j in 16..68 {
         w[j] = p1(w[j - 16] ^ w[j - 9] ^ rotate_left(w[j - 3], 15))
