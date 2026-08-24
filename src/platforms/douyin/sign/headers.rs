@@ -225,7 +225,7 @@ fn encrypt_ladon(md5hex: &[u8], data: &[u8]) -> Vec<u8> {
 
     let padded = pkcs7_pad(data, 16);
     let mut output = vec![0u8; padded.len()];
-    for (index, chunk) in padded.chunks_exact(16).enumerate() {
+    for (index, chunk) in padded.as_chunks::<16>().0.iter().enumerate() {
         output[index * 16..(index + 1) * 16]
             .copy_from_slice(&encrypt_ladon_input(&hash_table, chunk));
     }
@@ -333,7 +333,7 @@ fn encrypt_argus(bean: &[(u32, ProtoValue)]) -> String {
     }
 
     let mut enc_pb = vec![0u8; protobuf.len()];
-    for (index, chunk) in protobuf.chunks_exact(16).enumerate() {
+    for (index, chunk) in protobuf.as_chunks::<16>().0.iter().enumerate() {
         let pt = [
             u64::from_le_bytes(chunk[..8].try_into().unwrap()),
             u64::from_le_bytes(chunk[8..].try_into().unwrap()),
