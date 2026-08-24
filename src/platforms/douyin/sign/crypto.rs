@@ -1,7 +1,7 @@
 //! SM3, Simon, protobuf, and AES helpers matching SignerPy 0.12.0.
 
 use aes::Aes128;
-use cbc::cipher::{BlockEncryptMut, KeyIvInit, block_padding::Pkcs7};
+use cbc::cipher::{BlockModeEncrypt, KeyIvInit, block_padding::Pkcs7};
 use md5::{Digest, Md5};
 
 type Aes128CbcEnc = cbc::Encryptor<Aes128>;
@@ -19,7 +19,7 @@ pub(super) fn aes128_cbc_encrypt(key: &[u8; 16], iv: &[u8; 16], data: &[u8]) -> 
     let mut buffer = data.to_vec();
     buffer.extend(std::iter::repeat_n(0, pad));
     let encrypted = Aes128CbcEnc::new(key.into(), iv.into())
-        .encrypt_padded_mut::<Pkcs7>(&mut buffer, data.len())
+        .encrypt_padded::<Pkcs7>(&mut buffer, data.len())
         .expect("PKCS7 padding fits reserved block");
     encrypted.to_vec()
 }
